@@ -485,6 +485,14 @@ spdmContextInit_IMPL
     // Initialize session message count to zero.
     pSpdm->sessionMsgCount = 0;
 
+    // Libspdm provides basic functionality to check the context
+    if (!libspdm_check_context(pSpdm->pLibspdmContext))
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed libspdm context selftest!\n");
+        status = NV_ERR_INVALID_STATE;
+        goto ErrorExit;
+    }
+
 ErrorExit:
 
     // Clear all SPDM state on failure.

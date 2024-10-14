@@ -491,6 +491,7 @@ ccslContextInitViaChannel_IMPL
 
     pCtx->currDecryptBundle = 0;
 
+    writeKmbToContext(pCtx, &getKmbParams.kmb, ROTATE_IV_ALL_VALID);
 
     status = memdescCreate(&pMemDesc, pGpu, sizeof(CC_CRYPTOBUNDLE_STATS), sizeof(NvU64), NV_TRUE,
                            ADDR_SYSMEM, NV_MEMORY_UNCACHED, MEMDESC_FLAGS_NONE);
@@ -505,7 +506,6 @@ ccslContextInitViaChannel_IMPL
     pCtx->pEncStatsBuffer = pKernelChannel->pEncStatsBuf;
     pCtx->pMemDesc = pMemDesc;
     pCtx->msgCounterSize = CSL_MSG_CTR_32;
-    writeKmbToContext(pCtx, &getKmbParams.kmb, ROTATE_IV_ALL_VALID);
 
     // Set values only used for GSP keys to invalid
     pCtx->globalKeyIdIn  = CC_GKEYID_GEN(CC_KEYSPACE_SIZE, 0);
@@ -593,7 +593,6 @@ ccslContextInitViaKeyId_KERNEL
                                                      &kmb);
     if (status != NV_OK)
     {
-        portMemFree((void *)pCtx->pEncStatsBuffer);
         openrmCtxFree(pCtx->openrmCtx);
         portMemFree(pCtx);
         return status;
@@ -623,11 +622,8 @@ ccslContextClear_IMPL
         return;
     }
 
-    if (isChannel(pCtx))
-    {
-        portMemFree(pCtx->pDecryptBundles);
-    }
-    else
+    portMemFree(pCtx->pDecryptBundles);
+    if (!isChannel(pCtx))
     {
         portMemFree((void *)pCtx->pEncStatsBuffer);
     }

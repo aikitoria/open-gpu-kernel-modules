@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2014-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2014-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -660,6 +660,9 @@ typedef struct NVA081_CTRL_PGPU_GET_MULTI_VGPU_SUPPORT_INFO_PARAMS {
  *
  * heterogeneousMultiVgpuSupported [OUT]
  *  This param specifies whether heterogeneous multi-vGPU is supported
+ * warmUpdateSupported [OUT]
+ *  This param specifies FSR / warm driver update operation is supported
+ *  ie. supports FSR and warm update of vGPU host driver without terminating the running guest VM
  *
  * Possible status values returned are:
  *   NV_OK
@@ -674,6 +677,7 @@ typedef struct NVA081_CTRL_PGPU_GET_MULTI_VGPU_SUPPORT_INFO_PARAMS {
 
 typedef struct NVA081_CTRL_GET_VGPU_DRIVER_CAPS_PARAMS {
     NvU32 heterogeneousMultiVgpuSupported;
+    NvU32 warmUpdateSupported;
 } NVA081_CTRL_GET_VGPU_DRIVER_CAPS_PARAMS;
 
 /*
@@ -823,6 +827,7 @@ typedef struct NVA081_CTRL_PGPU_GET_VGPU_STREAMING_CAPABILITY_PARAMS {
 /* vGPU capabilities */
 #define NVA081_CTRL_VGPU_CAPABILITY_MINI_QUARTER_GPU         0
 #define NVA081_CTRL_VGPU_CAPABILITY_COMPUTE_MEDIA_ENGINE_GPU 1
+#define NVA081_CTRL_VGPU_CAPABILITY_WARM_UPDATE              2
 
 /*
  * NVA081_CTRL_CMD_VGPU_SET_CAPABILITY
@@ -951,27 +956,5 @@ typedef struct NVA081_CTRL_VGPU_GET_BAR_INFO_PARAMS {
     NvU32  sparseCount;
     NvBool isBar064bit;
 } NVA081_CTRL_VGPU_GET_BAR_INFO_PARAMS;
-
-/*
- * NVA081_CTRL_CMD_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH
- *
- * This command is to get the migration bandwidth of the physical GPU.
- *
- * migrationBandwidth [OUT]
- *  This param specifies the migration bandwidth of GPU
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_INVALID_REQUEST
- *   NV_ERR_INVALID_STATE
- *   NV_ERR_INVALID_ARGUMENT
- */
-#define NVA081_CTRL_CMD_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH (0xa0810122) /* finn: Evaluated from "(FINN_NVA081_VGPU_CONFIG_VGPU_CONFIG_INTERFACE_ID << 8) | NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS_MESSAGE_ID" */
-
-#define NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS_MESSAGE_ID (0x22U)
-
-typedef struct NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS {
-    NvU32 migrationBandwidth;
-} NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS;
 
 /* _ctrlA081vgpuconfig_h_ */

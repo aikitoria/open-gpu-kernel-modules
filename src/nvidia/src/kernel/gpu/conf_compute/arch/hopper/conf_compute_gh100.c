@@ -601,7 +601,6 @@ NV_STATUS confComputeUpdateSecrets_GH100(ConfidentialCompute *pConfCompute,
 {
     OBJGPU *pGpu   = ENG_GET_GPU(pConfCompute);
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
-
     NvU32   h2dKey, d2hKey;
     NV2080_CTRL_INTERNAL_CONF_COMPUTE_ROTATE_KEYS_PARAMS params = {0};
 

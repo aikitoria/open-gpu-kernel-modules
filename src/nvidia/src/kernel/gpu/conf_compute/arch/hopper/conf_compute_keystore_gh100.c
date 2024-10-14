@@ -127,6 +127,7 @@ confComputeKeyStoreDeinit_GH100(ConfidentialCompute *pConfCompute)
         portMemSet(pConfCompute->m_keySlot, 0, (NvLength) sizeof(keySlot_t));
         confComputeKeyStoreClearExportMasterKey_HAL(pConfCompute);
         portMemFree(pConfCompute->m_keySlot);
+        pConfCompute->m_keySlot = NULL;
     }
 }
 

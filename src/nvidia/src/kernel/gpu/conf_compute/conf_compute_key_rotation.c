@@ -186,6 +186,10 @@ performKeyRotationByKeyPair
             portMemSet(pKernelChannel->pEncStatsBuf, 0, sizeof(CC_CRYPTOBUNDLE_STATS));
     }
 
+    // reset KR state
+    pConfCompute->keyRotationCallbackCount[h2dIndex] = 1;
+    pConfCompute->keyRotationCallbackCount[d2hIndex] = 1;
+
     // clear aggregate and freed channel stats
     pConfCompute->aggregateStats[h2dIndex].totalBytesEncrypted = 0;
     pConfCompute->aggregateStats[h2dIndex].totalEncryptOps     = 0;
@@ -232,10 +236,6 @@ performKeyRotationByKeyPair
             }
         }
     }
-
-    NV_PRINTF(LEVEL_INFO, "Key rotation successful for key IDs 0x%x and 0x%x.\n", h2dKey, d2hKey);
-    NV_PRINTF(LEVEL_INFO, "This keypair has been rotated %u times.", pConfCompute->keyRotationCount[h2dIndex]);
-
     return NV_OK;
 }
 
@@ -341,7 +341,7 @@ confComputePerformKeyRotation_IMPL
         NV_ASSERT_OK_OR_GOTO(status, osQueueWorkItemWithFlags(pGpu, performKeyRotation_WORKITEM, (void*)pWorkItemInfo,
                                                               (OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
                                                                OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW |
-                                                               OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW)), cleanup);
+                                                               OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS)), cleanup);
     }
     else
     {
@@ -514,7 +514,17 @@ confComputeSetKeyRotationThreshold_IMPL(ConfidentialCompute *pConfCompute,
         12148001999ull,
         8589934591ull,
         6074000999ull,
-        4294967295ull};
+        4294967295ull,
+        3037000499ull,
+        2147483647ull,
+        1518500249ull,
+        1073741823ull,
+        759250124ull,
+        536870911ull,
+        379625061ull,
+        268435455ull,
+        189812530ull,
+        134217727ull};
 
     NV_ASSERT_OR_RETURN((attackerAdvantage >= offset) &&
         (attackerAdvantage <= (offset + NV_ARRAY_ELEMENTS(keyRotationUpperThreshold) - 1)),
@@ -522,7 +532,7 @@ confComputeSetKeyRotationThreshold_IMPL(ConfidentialCompute *pConfCompute,
 
     pConfCompute->keyRotationUpperThreshold = keyRotationUpperThreshold[attackerAdvantage - offset];
     pConfCompute->keyRotationLowerThreshold = pConfCompute->keyRotationUpperThreshold -
-                                              pConfCompute->keyRotationThresholdDelta;
+                                          pConfCompute->keyRotationThresholdDelta;
 
     NV_PRINTF(LEVEL_INFO, "Setting key rotation attacker advantage to %llu.\n", attackerAdvantage);
     NV_PRINTF(LEVEL_INFO, "Key rotation lower threshold is %llu and upper threshold is %llu.\n",

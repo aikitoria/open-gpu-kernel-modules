@@ -49,6 +49,8 @@
 
 #include "class/clc86f.h"   // HOPPER_CHANNEL_GPFIFO_A
 
+#include "class/clc9b5.h"      // BLACKWELL_DMA_COPY_A
+
 #include "gpu/conf_compute/ccsl.h"
 
 #include "nvctassert.h"

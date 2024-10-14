@@ -71,7 +71,7 @@ test_header_presence() {
     TEST_CFLAGS="-E -M $CFLAGS"
 
     file="$1"
-    file_define=NV_`echo $file | tr '/.\-a-z' '___A-Z'`_PRESENT
+    file_define=NV_`echo $file | tr '/.-' '___' | tr 'a-z' 'A-Z'`_PRESENT
 
     CODE="#include <$file>"
 
@@ -5554,7 +5554,8 @@ compile_test() {
 
         of_dma_configure)
             #
-            # Determine if of_dma_configure() function is present
+            # Determine if of_dma_configure() function is present, and how
+            # many arguments it takes.
             #
             # Added by commit 591c1ee465ce ("of: configure the platform
             # device dma parameters") in v3.16.  However, it was a static,
@@ -5564,17 +5565,69 @@ compile_test() {
             # commit 1f5c69aa51f9 ("of: Move of_dma_configure() to device.c
             # to help re-use") in v4.1.
             #
-            CODE="
+            # It subsequently began taking a third parameter with commit
+            # 3d6ce86ee794 ("drivers: remove force dma flag from buses")
+            # in v4.18.
+            #
+
+            echo "$CONFTEST_PREAMBLE
             #if defined(NV_LINUX_OF_DEVICE_H_PRESENT)
             #include <linux/of_device.h>
             #endif
+
             void conftest_of_dma_configure(void)
             {
                 of_dma_configure();
             }
-            "
+            " > conftest$$.c
 
-            compile_check_conftest "$CODE" "NV_OF_DMA_CONFIGURE_PRESENT" "" "functions"
+            $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+            rm -f conftest$$.c
+
+            if [ -f conftest$$.o ]; then
+                rm -f conftest$$.o
+
+                echo "#undef NV_OF_DMA_CONFIGURE_PRESENT" | append_conftest "functions"
+                echo "#undef NV_OF_DMA_CONFIGURE_ARGUMENT_COUNT" | append_conftest "functions"
+            else
+                echo "#define NV_OF_DMA_CONFIGURE_PRESENT" | append_conftest "functions"
+
+                echo "$CONFTEST_PREAMBLE
+                #if defined(NV_LINUX_OF_DEVICE_H_PRESENT)
+                #include <linux/of_device.h>
+                #endif
+
+                void conftest_of_dma_configure(void) {
+                    of_dma_configure(NULL, NULL, false);
+                }" > conftest$$.c
+
+                $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+                rm -f conftest$$.c
+
+                if [ -f conftest$$.o ]; then
+                    rm -f conftest$$.o
+                    echo "#define NV_OF_DMA_CONFIGURE_ARGUMENT_COUNT 3" | append_conftest "functions"
+                    return
+                fi
+
+                echo "$CONFTEST_PREAMBLE
+                #if defined(NV_LINUX_OF_DEVICE_H_PRESENT)
+                #include <linux/of_device.h>
+                #endif
+
+                void conftest_of_dma_configure(void) {
+                    of_dma_configure(NULL, NULL);
+                }" > conftest$$.c
+
+                $CC $CFLAGS -c conftest$$.c > /dev/null 2>&1
+                rm -f conftest$$.c
+
+                if [ -f conftest$$.o ]; then
+                    rm -f conftest$$.o
+                    echo "#define NV_OF_DMA_CONFIGURE_ARGUMENT_COUNT 2" | append_conftest "functions"
+                    return
+                fi
+            fi
         ;;
 
         icc_get)
@@ -6795,12 +6848,45 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_DRM_MODE_CREATE_DP_COLORSPACE_PROPERTY_HAS_SUPPORTED_COLORSPACES_ARG" "" "types"
         ;;
 
+        drm_syncobj_features_present)
+            # Determine if DRIVER_SYNCOBJ and DRIVER_SYNCOBJ_TIMELINE DRM
+            # driver features are present. Timeline DRM synchronization objects
+            # may only be used if both of these are supported by the driver.
+            #
+            # DRIVER_SYNCOBJ_TIMELINE Added by commit 060cebb20cdb ("drm:
+            # introduce a capability flag for syncobj timeline support") in
+            # v5.2
+            #
+            # DRIVER_SYNCOBJ Added by commit e9083420bbac ("drm: introduce
+            # sync objects (v4)") in v4.12
+            CODE="
+            #if defined(NV_DRM_DRM_DRV_H_PRESENT)
+            #include <drm/drm_drv.h>
+            #endif
+            int features = DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE;"
+
+            compile_check_conftest "$CODE" "NV_DRM_SYNCOBJ_FEATURES_PRESENT" "" "types"
+        ;;
+
+        stack_trace)
+            # Determine if functions stack_trace_{save,print} are present.
+            # Added by commit e9b98e162 ("stacktrace: Provide helpers for
+            # common stack trace operations") in v5.2.
+            CODE="
+            #include <linux/stacktrace.h>
+            void conftest_stack_trace(void) {
+                stack_trace_save();
+                stack_trace_print();
+            }"
+
+            compile_check_conftest "$CODE" "NV_STACK_TRACE_PRESENT" "" "functions"
+        ;;
+
         drm_unlocked_ioctl_flag_present)
             # Determine if DRM_UNLOCKED IOCTL flag is present.
             #
             # DRM_UNLOCKED was removed by commit 2798ffcc1d6a ("drm: Remove
-            # locking for legacy ioctls and DRM_UNLOCKED") in Linux
-            # next-20231208.
+            # locking for legacy ioctls and DRM_UNLOCKED") in v6.8.
             #
             # DRM_UNLOCKED definition was moved from drmP.h to drm_ioctl.h by
             # commit 2640981f3600 ("drm: document drm_ioctl.[hc]") in v4.12.
@@ -6814,6 +6900,94 @@ compile_test() {
             int flags = DRM_UNLOCKED;"
 
             compile_check_conftest "$CODE" "NV_DRM_UNLOCKED_IOCTL_FLAG_PRESENT" "" "types"
+        ;;
+
+        fault_flag_remote_present)
+            # Determine if FAULT_FLAG_REMOTE is present in the kernel, either
+            # as a define or an enum
+            #
+            # FAULT_FLAG_REMOTE define added by Kernel commit 1b2ee1266ea6
+            # ("mm/core: Do not enforce PKEY permissions on remote mm access")
+            # in v4.6
+            # FAULT_FLAG_REMOTE changed from define to enum by Kernel commit
+            # da2f5eb3d344 ("mm/doc: turn fault flags into an enum") in v5.13
+            # FAULT_FLAG_REMOTE moved from `mm.h` to `mm_types.h` by Kernel
+            # commit 36090def7bad ("mm: move tlb_flush_pending inline helpers
+            # to mm_inline.h") in v5.17
+            #
+            CODE="
+            #include <linux/mm.h>
+            int fault_flag_remote = FAULT_FLAG_REMOTE;
+            "
+
+            compile_check_conftest "$CODE" "NV_MM_HAS_FAULT_FLAG_REMOTE" "" "types"
+        ;;
+
+        drm_framebuffer_obj_present)
+            #
+            # Determine if the drm_framebuffer struct has an obj member.
+            #
+            # Added by commit 4c3dbb2c312c ("drm: Add GEM backed framebuffer
+            # library") in v4.14.
+            #
+            CODE="
+            #if defined(NV_DRM_DRMP_H_PRESENT)
+            #include <drm/drmP.h>
+            #endif
+
+            #if defined(NV_DRM_DRM_FRAMEBUFFER_H_PRESENT)
+            #include <drm/drm_framebuffer.h>
+            #endif
+
+            int conftest_drm_framebuffer_obj_present(void) {
+                return offsetof(struct drm_framebuffer, obj);
+            }"
+
+            compile_check_conftest "$CODE" "NV_DRM_FRAMEBUFFER_OBJ_PRESENT" "" "types"
+        ;;
+
+        drm_color_ctm_3x4_present)
+            # Determine if struct drm_color_ctm_3x4 is present.
+            #
+            # struct drm_color_ctm_3x4 was added by commit 6872a189be50
+            # ("drm/amd/display: Add 3x4 CTM support for plane CTM") in v6.8.
+            CODE="
+            #include <uapi/drm/drm_mode.h>
+            struct drm_color_ctm_3x4 ctm;"
+
+            compile_check_conftest "$CODE" "NV_DRM_COLOR_CTM_3X4_PRESENT" "" "types"
+        ;;
+
+        drm_color_lut)
+            # Determine if struct drm_color_lut is present.
+            #
+            # struct drm_color_lut was added by commit 5488dc16fde7
+            # ("drm: introduce pipe color correction properties") in v4.6.
+            CODE="
+            #include <uapi/drm/drm_mode.h>
+            struct drm_color_lut lut;"
+
+            compile_check_conftest "$CODE" "NV_DRM_COLOR_LUT_PRESENT" "" "types"
+        ;;
+
+        drm_property_blob_put)
+            #
+            # Determine if function drm_property_blob_put() is present.
+            #
+            # Added by commit 6472e5090be7 ("drm: Introduce
+            # drm_property_blob_{get,put}()") v4.12, when it replaced
+            # drm_property_unreference_blob().
+            #
+
+            CODE="
+            #if defined(NV_DRM_DRM_PROPERTY_H_PRESENT)
+            #include <drm/drm_property.h>
+            #endif
+            void conftest_drm_property_blob_put(void) {
+                drm_property_blob_put();
+            }"
+
+            compile_check_conftest "$CODE" "NV_DRM_PROPERTY_BLOB_PUT_PRESENT" "" "functions"
         ;;
 
         # When adding a new conftest entry, please use the correct format for

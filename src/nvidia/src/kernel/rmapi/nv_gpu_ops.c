@@ -72,6 +72,7 @@
 #include <class/clc8b5.h> // HOPPER_DMA_COPY_A
 #include <class/clcbc0.h> // HOPPER_COMPUTE_A
 #include <class/clcba2.h> // HOPPER_SEC2_WORK_LAUNCH_A
+#include <class/clc9b5.h> // BLACKWELL_DMA_COPY_A
 #include <alloc/alloc_access_counter_buffer.h>
 
 #include <ctrl/ctrl0000/ctrl0000gpu.h>
@@ -120,7 +121,7 @@
 #include <mem_mgr/vaspace.h>
 #include <mmu/gmmu_fmt.h>
 #include <nv_uvm_types.h>
-#include <objrpc.h>
+#include <gpu/rpc/objrpc.h>
 #include <os/os.h>
 #include <resserv/rs_client.h>
 #include <rmapi/client.h>
@@ -264,7 +265,6 @@ struct gpuDevice
     NvBool             isTccMode;
     NvBool             isWddmMode;
     struct gpuSession  *session;
-    NvU8               gpuUUID[NV_GPU_UUID_LEN];
     gpuFbInfo          fbInfo;
     gpuInfo            info;
 
@@ -389,9 +389,6 @@ struct systemP2PCaps
     // true if the two GPUs are direct NvLink or PCIe peers
     NvU32 accessSupported : 1;
 
-    // true if the two GPUs are indirect (NvLink) peers
-    NvU32 indirectAccessSupported : 1;
-
     // true if the two GPUs are direct NvLink peers
     NvU32 nvlinkSupported : 1;
 
@@ -485,7 +482,7 @@ typedef struct nvGpuOpsLockSet
     NvBool isRmLockAcquired;
     NvBool isRmSemaAcquired;
     GPU_MASK gpuMask;
-    RsClient *pClientLocked;
+    CLIENT_ENTRY *pClientEntryLocked;
 } nvGpuOpsLockSet;
 
 static void _nvGpuOpsLocksRelease(nvGpuOpsLockSet *acquiredLocks)
@@ -499,10 +496,11 @@ static void _nvGpuOpsLocksRelease(nvGpuOpsLockSet *acquiredLocks)
         acquiredLocks->gpuMask = 0;
     }
 
-    if (acquiredLocks->pClientLocked != NULL)
+    if (acquiredLocks->pClientEntryLocked != NULL)
     {
-        serverReleaseClient(&g_resServ, LOCK_ACCESS_WRITE, acquiredLocks->pClientLocked);
-        acquiredLocks->pClientLocked = NULL;
+        serverReleaseClient(&g_resServ, LOCK_ACCESS_WRITE,
+            acquiredLocks->pClientEntryLocked);
+        acquiredLocks->pClientEntryLocked = NULL;
     }
 
     if (acquiredLocks->isRmLockAcquired == NV_TRUE)
@@ -534,7 +532,7 @@ static NV_STATUS _nvGpuOpsLocksAcquire(NvU32 rmApiLockFlags,
     acquiredLocks->isRmSemaAcquired = NV_FALSE;
     acquiredLocks->isRmLockAcquired = NV_FALSE;
     acquiredLocks->gpuMask = 0;
-    acquiredLocks->pClientLocked = NULL;
+    acquiredLocks->pClientEntryLocked = NULL;
 
     pSys = SYS_GET_INSTANCE();
     if (pSys == NULL)
@@ -559,7 +557,7 @@ static NV_STATUS _nvGpuOpsLocksAcquire(NvU32 rmApiLockFlags,
 
     if (hClient != NV01_NULL_OBJECT)
     {
-        status = serverAcquireClient(&g_resServ, hClient, LOCK_ACCESS_WRITE, &acquiredLocks->pClientLocked);
+        status = serverAcquireClient(&g_resServ, hClient, LOCK_ACCESS_WRITE, &acquiredLocks->pClientEntryLocked);
 
         if (status != NV_OK)
         {
@@ -568,7 +566,7 @@ static NV_STATUS _nvGpuOpsLocksAcquire(NvU32 rmApiLockFlags,
         }
 
         if (ppClient != NULL)
-            *ppClient = acquiredLocks->pClientLocked;
+            *ppClient = acquiredLocks->pClientEntryLocked->pClient;
     }
 
     //
@@ -1611,7 +1609,8 @@ static UVM_LINK_TYPE rmControlToUvmNvlinkVersion(NvU32 nvlinkVersion)
         return UVM_LINK_TYPE_NVLINK_3;
     else if (nvlinkVersion == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_4_0)
         return UVM_LINK_TYPE_NVLINK_4;
-
+    else if (nvlinkVersion == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_5_0)
+        return UVM_LINK_TYPE_NVLINK_5;
     NV_ASSERT(0);
     return (NvU32)-1;
 }
@@ -1685,7 +1684,9 @@ out:
     return nvStatus;
 }
 
-NV_STATUS calculatePCIELinkRateMBps(NvU32 lanes, NvU32 pciLinkMaxSpeed, NvU32 *pcieLinkRate)
+// Return the PCIE link cap max speed associated with the given subdevice in
+// megabytes per second.
+static NV_STATUS getPCIELinkRateMBps(NvHandle hClient, NvHandle hSubDevice, NvU32 *pcieLinkRate)
 {
     // PCI Express Base Specification: https://www.pcisig.com/specifications/pciexpress
     const NvU32 PCIE_1_ENCODING_RATIO_TOTAL = 10;
@@ -1701,11 +1702,31 @@ NV_STATUS calculatePCIELinkRateMBps(NvU32 lanes, NvU32 pciLinkMaxSpeed, NvU32 *p
     const NvU32 PCIE_6_ENCODING_RATIO_TOTAL = 256;
     const NvU32 PCIE_6_ENCODING_RATIO_EFFECTIVE = 242;
 
-    NV_STATUS status = NV_OK;
+    RM_API *pRmApi = rmapiGetInterface(RMAPI_EXTERNAL_KERNEL);
+    NV2080_CTRL_BUS_GET_INFO_V2_PARAMS busInfoV2Params = {0};
     NvU32 linkRate = 0;
+    NvU32 lanes;
+
+    busInfoV2Params.busInfoList[0].index = NV2080_CTRL_BUS_INFO_INDEX_PCIE_GPU_LINK_CAPS;
+    busInfoV2Params.busInfoListSize = 1;
+
+    NV_STATUS status = pRmApi->Control(pRmApi,
+                                       hClient,
+                                       hSubDevice,
+                                       NV2080_CTRL_CMD_BUS_GET_INFO_V2,
+                                       &busInfoV2Params,
+                                       sizeof(busInfoV2Params));
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "%s:%d: %s\n", __FUNCTION__,
+                  __LINE__, nvstatusToString(status));
+        return status;
+    }
+
+    lanes = DRF_VAL(2080, _CTRL_BUS_INFO, _PCIE_LINK_CAP_MAX_WIDTH, busInfoV2Params.busInfoList[0].data);
 
     // Bug 2606540: RM reports PCIe transfer rate in GT/s but labels it as Gbps
-    switch (pciLinkMaxSpeed)
+    switch (DRF_VAL(2080, _CTRL_BUS_INFO, _PCIE_LINK_CAP_MAX_SPEED, busInfoV2Params.busInfoList[0].data))
     {
         case NV2080_CTRL_BUS_INFO_PCIE_LINK_CAP_MAX_SPEED_2500MBPS:
             linkRate = ((2500 * lanes * PCIE_1_ENCODING_RATIO_EFFECTIVE)
@@ -1737,47 +1758,6 @@ NV_STATUS calculatePCIELinkRateMBps(NvU32 lanes, NvU32 pciLinkMaxSpeed, NvU32 *p
     }
 
     *pcieLinkRate = linkRate;
-
-    return status;
-
-}
-
-// Return the PCIE link cap max speed associated with the given subdevice in
-// megabytes per second.
-static NV_STATUS getPCIELinkRateMBps(NvHandle hClient, NvHandle hSubDevice, NvU32 *pcieLinkRate)
-{
-    RM_API *pRmApi = rmapiGetInterface(RMAPI_EXTERNAL_KERNEL);
-    NV2080_CTRL_BUS_INFO busInfo = {0};
-    NV2080_CTRL_BUS_GET_INFO_PARAMS busInfoParams = {0};
-    NvU32 lanes = 0;
-    NvU32 pciLinkMaxSpeed = 0;
-
-    busInfo.index = NV2080_CTRL_BUS_INFO_INDEX_PCIE_GPU_LINK_CAPS;
-    busInfoParams.busInfoListSize = 1;
-    busInfoParams.busInfoList = NV_PTR_TO_NvP64(&busInfo);
-
-    NV_STATUS status = pRmApi->Control(pRmApi,
-                                       hClient,
-                                       hSubDevice,
-                                       NV2080_CTRL_CMD_BUS_GET_INFO,
-                                       &busInfoParams,
-                                       sizeof(busInfoParams));
-    if (status != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "%s:%d: %s\n", __FUNCTION__,
-                  __LINE__, nvstatusToString(status));
-        return status;
-    }
-
-    lanes = DRF_VAL(2080, _CTRL_BUS_INFO, _PCIE_LINK_CAP_MAX_WIDTH, busInfo.data);
-    pciLinkMaxSpeed =  DRF_VAL(2080, _CTRL_BUS_INFO, _PCIE_LINK_CAP_MAX_SPEED, busInfo.data);
-
-    status = calculatePCIELinkRateMBps(lanes, pciLinkMaxSpeed, pcieLinkRate);
-    if (status != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "%s:%d: %s\n", __FUNCTION__,
-                  __LINE__, nvstatusToString(status));
-    }
 
     return status;
 }
@@ -2580,52 +2560,6 @@ static NvU32 getNvlinkConnectionToSwitch(const NV2080_CTRL_CMD_NVLINK_GET_NVLINK
     return version;
 }
 
-// Compute whether the non-peer GPUs with the given NVLink connections can
-// communicate through P9 NPUs
-static NV_STATUS gpusHaveNpuNvlink(NV2080_CTRL_CMD_NVLINK_GET_NVLINK_STATUS_PARAMS *nvlinkStatus1,
-                                   NV2080_CTRL_CMD_NVLINK_GET_NVLINK_STATUS_PARAMS *nvlinkStatus2,
-                                   NvU32 *nvlinkVersion)
-{
-    NvU32 nvlinkVersion1, nvlinkVersion2;
-    NvU32 tmpLinkBandwidthMBps;
-    NvBool atomicSupported1, atomicSupported2;
-
-    *nvlinkVersion = NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_INVALID;
-
-    nvlinkVersion1 = getNvlinkConnectionToNpu(nvlinkStatus1,
-                                              &atomicSupported1,
-                                              &tmpLinkBandwidthMBps);
-    nvlinkVersion2 = getNvlinkConnectionToNpu(nvlinkStatus2,
-                                              &atomicSupported2,
-                                              &tmpLinkBandwidthMBps);
-
-    if (nvlinkVersion1 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_INVALID ||
-        nvlinkVersion2 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_INVALID)
-        return NV_OK;
-
-    // Non-peer GPU communication over NPU is only supported on NVLink 2.0 or
-    // greater
-    if (nvlinkVersion1 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_1_0 ||
-        nvlinkVersion2 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_1_0)
-    {
-        // NVLink1 devices cannot be mixed with other versions. NVLink3
-        // supports mixing NVLink2 and NVLink3 devices
-        NV_ASSERT(nvlinkVersion1 == nvlinkVersion2);
-        return NV_OK;
-    }
-
-    NV_ASSERT(atomicSupported1);
-    NV_ASSERT(atomicSupported2);
-
-    // We do not explore the whole connectivity graph. We assume that NPUs
-    // connected to NVLink2 (and greater) can forward memory requests so that
-    // if GPU A is connected to NPU M and GPU B is connected to NPU N, A can
-    // access B.
-    *nvlinkVersion = NV_MIN(nvlinkVersion1, nvlinkVersion2);
-
-    return NV_OK;
-}
-
 static NV_STATUS rmSystemP2PCapsControl(struct gpuDevice *device1,
                                         struct gpuDevice *device2,
                                         NV0000_CTRL_SYSTEM_GET_P2P_CAPS_V2_PARAMS *p2pCapsParams,
@@ -2681,8 +2615,6 @@ static NV_STATUS getSystemP2PCaps(struct gpuDevice *device1,
     p2pCaps->egmPeerIds[1] = p2pCapsParams->busEgmPeerIds[1 * 2 + 0];
     p2pCaps->nvlinkSupported = !!REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_NVLINK_SUPPORTED, p2pCapsParams->p2pCaps);
     p2pCaps->atomicSupported = !!REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_ATOMICS_SUPPORTED, p2pCapsParams->p2pCaps);
-    p2pCaps->indirectAccessSupported = !!REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_INDIRECT_NVLINK_SUPPORTED,
-                                                 p2pCapsParams->p2pCaps);
 
     // TODO: Bug 1768805: Check both reads and writes since RM seems to be
     //       currently incorrectly reporting just the P2P write cap on some
@@ -2691,12 +2623,10 @@ static NV_STATUS getSystemP2PCaps(struct gpuDevice *device1,
     if (REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_READS_SUPPORTED, p2pCapsParams->p2pCaps) &&
         REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_WRITES_SUPPORTED, p2pCapsParams->p2pCaps))
     {
-        NV_ASSERT(!p2pCaps->indirectAccessSupported);
-
         p2pCaps->accessSupported = NV_TRUE;
     }
 
-    if (p2pCaps->nvlinkSupported || p2pCaps->indirectAccessSupported)
+    if (p2pCaps->nvlinkSupported)
     {
         //
         // Exactly one CE is expected to be recommended for transfers between
@@ -2786,12 +2716,15 @@ static NV_STATUS getNvlinkP2PCaps(struct gpuDevice *device1,
     }
 
     // NVLink1 devices cannot be mixed with other versions. NVLink3 supports
-    // mixing NVLink2 and NVLink3 devices. NVLink4 devices cannot be mixed with
-    // prior NVLink versions.
+    // mixing NVLink2 and NVLink3 devices. NVLink4 and NVLink 5 devices cannot
+    // be mixed with prior NVLink versions or with each other.
     if (nvlinkVersion1 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_1_0 ||
         nvlinkVersion2 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_1_0 ||
         nvlinkVersion1 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_4_0 ||
-        nvlinkVersion2 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_4_0)
+        nvlinkVersion2 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_4_0
+        || nvlinkVersion1 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_5_0 ||
+        nvlinkVersion2 == NV2080_CTRL_NVLINK_STATUS_NVLINK_VERSION_5_0
+       )
     {
         NV_ASSERT(nvlinkVersion1 == nvlinkVersion2);
         NV_ASSERT(linkBandwidthMBps1 == linkBandwidthMBps2);
@@ -2839,39 +2772,13 @@ NV_STATUS nvGpuOpsGetP2PCaps(struct gpuDevice *device1,
     p2pCapsParams->egmPeerIds[0]      = (NvU32)-1;
     p2pCapsParams->egmPeerIds[1]      = (NvU32)-1;
     p2pCapsParams->p2pLink         = UVM_LINK_TYPE_NONE;
-    p2pCapsParams->indirectAccess  = NV_FALSE;
 
     status = getSystemP2PCaps(device1, device2, &p2pCaps,
                               RMAPI_EXTERNAL_KERNEL);
     if (status != NV_OK)
         goto cleanup;
 
-    if (p2pCaps.indirectAccessSupported)
-    {
-        NvU32 nvlinkVersion;
-        NvU32 p2pLink;
-
-        status = gpusHaveNpuNvlink(nvlinkStatus1,
-                                   nvlinkStatus2,
-                                   &nvlinkVersion);
-        if (status != NV_OK)
-            goto cleanup;
-
-        p2pLink = rmControlToUvmNvlinkVersion(nvlinkVersion);
-
-        NV_ASSERT(p2pLink >= UVM_LINK_TYPE_NVLINK_2);
-
-        p2pCapsParams->indirectAccess           = NV_TRUE;
-        p2pCapsParams->p2pLink                  = p2pLink;
-        p2pCapsParams->optimalNvlinkWriteCEs[0] = p2pCaps.optimalNvlinkWriteCEs[0];
-        p2pCapsParams->optimalNvlinkWriteCEs[1] = p2pCaps.optimalNvlinkWriteCEs[1];
-
-        // Link bandwidth not provided because the intermediate link rate could
-        // vary a lot with system topologies & current load, making this bandwidth
-        // obsolete.
-        p2pCapsParams->totalLinkLineRateMBps    = 0;
-    }
-    else if (p2pCaps.accessSupported)
+    if (p2pCaps.accessSupported)
     {
         p2pCapsParams->peerIds[0] = p2pCaps.peerIds[0];
         p2pCapsParams->peerIds[1] = p2pCaps.peerIds[1];
@@ -4171,6 +4078,10 @@ static NV_STATUS nvGpuOpsAllocPhysical(struct gpuDevice *device,
             memAllocParams.attr |= DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE);
             memAllocParams.attr2 |= DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _512MB);
             break;
+        case RM_PAGE_SIZE_256G:
+            memAllocParams.attr |= DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE);
+            memAllocParams.attr2 |= DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _256GB);
+            break;
         default:
             memAllocParams.attr |= DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _DEFAULT);
             break;
@@ -4273,6 +4184,10 @@ static NV_STATUS nvGpuOpsAllocVirtual(struct gpuAddressSpace *vaSpace,
         case RM_PAGE_SIZE_512M:
             memAllocParams.attr |= DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE);
             memAllocParams.attr2 |= DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _512MB);
+            break;
+        case RM_PAGE_SIZE_256G:
+            memAllocParams.attr |= DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _HUGE);
+            memAllocParams.attr2 |= DRF_DEF(OS32, _ATTR2, _PAGE_SIZE_HUGE, _256GB);
             break;
         default:
             memAllocParams.attr |= DRF_DEF(OS32, _ATTR, _PAGE_SIZE, _DEFAULT);
@@ -6483,10 +6398,12 @@ static NV_STATUS getNvswitchInfo(OBJGPU *pGpu,
         if (pKernelNvlink == NULL)
         {
             pGpuInfo->nvswitchMemoryWindowStart = NVLINK_INVALID_FABRIC_ADDR;
+            pGpuInfo->nvswitchEgmMemoryWindowStart = NVLINK_INVALID_FABRIC_ADDR;
         }
         else
         {
             pGpuInfo->nvswitchMemoryWindowStart = knvlinkGetUniqueFabricBaseAddress(pGpu, pKernelNvlink);
+            pGpuInfo->nvswitchEgmMemoryWindowStart = knvlinkGetUniqueFabricEgmBaseAddress(pGpu, pKernelNvlink);
         }
     }
 
@@ -7475,6 +7392,7 @@ static NvBool isClassCE(NvU32 class)
         case AMPERE_DMA_COPY_A:
         case AMPERE_DMA_COPY_B:
         case HOPPER_DMA_COPY_A:
+        case BLACKWELL_DMA_COPY_A:
             return NV_TRUE;
 
         default:

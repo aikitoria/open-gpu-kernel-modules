@@ -31,7 +31,7 @@
 #include "os/os.h"
 #include "nv.h"
 #include "nv-priv.h"
-#include <nvRmReg.h>
+#include <nvrm_registry.h>
 #include <virtualization/hypervisor/hypervisor.h>
 #include "core/thread_state.h"
 #include "core/locks.h"
@@ -40,7 +40,7 @@
 #include "kernel/gpu/fifo/kernel_fifo.h"
 #include "osapi.h"
 #include "virtualization/kernel_hostvgpudeviceapi.h"
-#include <objtmr.h>
+#include "gpu/timer/objtmr.h"
 #include "gpu/bif/kernel_bif.h"
 #include "gpu/bus/kern_bus.h"
 #include <nv_ref.h>               // NV_PMC_BOOT_1_VGPU
@@ -799,7 +799,9 @@ NV_STATUS NV_API_CALL nv_gpu_unbind_event
 }
 
 NV_STATUS NV_API_CALL nv_gpu_bind_event(
-    nvidia_stack_t *sp
+    nvidia_stack_t *sp,
+    NvU32 gpuId,
+    NvBool *isEventNotified
 )
 {
     THREAD_STATE_NODE threadState;
@@ -812,7 +814,7 @@ NV_STATUS NV_API_CALL nv_gpu_bind_event(
     // LOCK: acquire API lock
     if ((rmStatus = rmapiLockAcquire(API_LOCK_FLAGS_NONE, RM_LOCK_MODULES_HYPERVISOR)) == NV_OK)
     {
-        CliAddSystemEvent(NV0000_NOTIFIERS_GPU_BIND_EVENT, 0, NULL);
+        CliAddSystemEvent(NV0000_NOTIFIERS_GPU_BIND_EVENT, gpuId, isEventNotified);
 
         // UNLOCK: release API lock
         rmapiLockRelease();

@@ -646,7 +646,8 @@ initInternalKeyRotationRegistryOverrides
             NV_PRINTF(LEVEL_ERROR, "RmKeyRotationInternalThreshold must be higher than minimum of %u!\n",
                         KEY_ROTATION_MINIMUM_INTERNAL_THRESHOLD);
         }
-        else
+        // TODO CONFCOMP-1740: For production, we must disable the ability to set threshold lower than minimum.
+        // else
         {
             NV_PRINTF(LEVEL_INFO, "Setting internal key rotation threshold to %u.\n",
                         internalThreshold);

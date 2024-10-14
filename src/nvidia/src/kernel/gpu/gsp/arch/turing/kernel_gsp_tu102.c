@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2017-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -35,7 +35,6 @@
 #include "core/thread_state.h"
 #include "os/os.h"
 #include "nverror.h"
-#include "gsp/gsp_error.h"
 #include "nvrm_registry.h"
 #include "crashcat/crashcat_report.h"
 
@@ -818,22 +817,6 @@ kgspResetHw_TU102
     return NV_OK;
 }
 
-static NvBool kgspCrashCatReportImpactsGspRm(CrashCatReport *pReport)
-{
-    NV_CRASHCAT_CONTAINMENT containment;
-
-    containment = crashcatReportSourceContainment_HAL(pReport);
-    switch (containment)
-    {
-       case NV_CRASHCAT_CONTAINMENT_RISCV_MODE_M:
-       case NV_CRASHCAT_CONTAINMENT_RISCV_HART:
-       case NV_CRASHCAT_CONTAINMENT_UNCONTAINED:
-           return NV_TRUE;
-       default:
-           return NV_FALSE;
-    }
-}
-
 NvBool
 kgspHealthCheck_TU102
 (
@@ -843,7 +826,7 @@ kgspHealthCheck_TU102
 {
     NvBool bHealthy = NV_TRUE;
 
-    // If enabled, CrashCat is the primary reporting interface for GSP issues
+    // CrashCat is the primary reporting interface for GSP issues
     KernelCrashCatEngine *pKernelCrashCatEng = staticCast(pKernelGsp, KernelCrashCatEngine);
     if (kcrashcatEngineConfigured(pKernelCrashCatEng))
     {
@@ -852,8 +835,8 @@ kgspHealthCheck_TU102
 
         while ((pReport = crashcatEngineGetNextCrashReport(pCrashCatEng)) != NULL)
         {
-            if (kgspCrashCatReportImpactsGspRm(pReport))
-                bHealthy = NV_FALSE;
+
+            bHealthy = NV_FALSE;
 
             NV_PRINTF(LEVEL_ERROR,
                 "****************************** GSP-CrashCat Report *******************************\n");
@@ -863,39 +846,6 @@ kgspHealthCheck_TU102
         }
 
         goto exit_health_check;
-    }
-
-    NvU32 mb0 = GPU_REG_RD32(pGpu, NV_PGSP_MAILBOX(0));
-
-    //
-    // Check for an error message in the GSP mailbox.  Any error reported here is
-    // almost certainly fatal.
-    //
-    if (FLD_TEST_DRF(_GSP, _ERROR, _TAG, _VAL, mb0))
-    {
-        NvU32 mb1 = GPU_REG_RD32(pGpu, NV_PGSP_MAILBOX(1));
-        NvU32 skipped = DRF_VAL(_GSP, _ERROR, _SKIPPED, mb0);
-
-        bHealthy = NV_FALSE;
-
-        // Clear the mailbox
-        GPU_REG_WR32(pGpu, NV_PGSP_MAILBOX(0), 0);
-
-        NV_PRINTF(LEVEL_ERROR,
-                  "********************************* GSP Failure **********************************\n");
-
-        NV_ERROR_LOG(pGpu, GSP_ERROR,
-                     "GSP Error: Task %d raised error code 0x%x for reason 0x%x at 0x%x.  The GPU likely needs to be reset.",
-                     DRF_VAL(_GSP, _ERROR, _TASK, mb0),
-                     DRF_VAL(_GSP, _ERROR, _CODE, mb0),
-                     DRF_VAL(_GSP, _ERROR, _REASON, mb0),
-                     mb1);
-
-        // Check if GSP had more errors to report (unlikely)
-        if (skipped)
-        {
-            NV_PRINTF(LEVEL_ERROR, "%d more errors skipped\n", skipped);
-        }
     }
 
 exit_health_check:
@@ -968,11 +918,15 @@ kgspService_TU102
 
         kgspDumpGspLogs(pKernelGsp, NV_FALSE);
         (void)kgspHealthCheck_HAL(pGpu, pKernelGsp);
+#if defined(DEBUG)
+        NV_PRINTF(LEVEL_ERROR, "GSP-RM entered into ICD\n");
+        DBG_BREAKPOINT();
+#endif
     }
     if (intrStatus & DRF_DEF(_PFALCON, _FALCON_IRQSTAT, _SWGEN0, _TRUE))
     {
         //
-        // Clear edge triggered interupt BEFORE (and never after)
+        // Clear edge triggered interrupt BEFORE (and never after)
         // servicing it to avoid race conditions.
         //
         kflcnRegWrite_HAL(pGpu, pKernelFalcon, NV_PFALCON_FALCON_IRQSCLR,

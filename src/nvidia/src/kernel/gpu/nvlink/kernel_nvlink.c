@@ -661,7 +661,10 @@ knvlinkUpdateCurrentConfig_IMPL
         status = kceFindFirstInstance(pGpu, &pKCe);
         if (status == NV_OK)
         {
-            status = kceTopLevelPceLceMappingsUpdate(pGpu, pKCe);
+        KernelCE *pKCeIter = NULL;
+        KCE_ITER_SHIM_BEGIN(pGpu, pKCeIter)
+            status = kceTopLevelPceLceMappingsUpdate(pGpu, pKCeIter);
+        KCE_ITER_END;
             if (status != NV_OK)
             {
                 NV_PRINTF(LEVEL_ERROR, "Failed to update PCE-LCE mappings\n");
@@ -686,21 +689,21 @@ const static NVLINK_INBAND_MSG_CALLBACK nvlink_inband_callbacks[] =
         .messageType = NVLINK_INBAND_MSG_TYPE_GPU_PROBE_RSP,
         .pCallback = gpuFabricProbeReceiveKernelCallback,
         .wqItemFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
-                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW
+                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE
     },
 
     {
         .messageType = NVLINK_INBAND_MSG_TYPE_MC_TEAM_SETUP_RSP,
         .pCallback = memorymulticastfabricTeamSetupResponseCallback,
         .wqItemFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
-                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS_RW
+                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPUS
     },
 
     {
         .messageType = NVLINK_INBAND_MSG_TYPE_GPU_PROBE_UPDATE_REQ,
         .pCallback = gpuFabricProbeReceiveUpdateKernelCallback,
         .wqItemFlags = OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
-                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW
+                       OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE
     }
 };
 
@@ -1040,26 +1043,33 @@ knvlinkGetPeersNvlinkMaskFromHshub_IMPL
     NvU32     peerLinkMask = 0;
     NvU32     i;
 
-    NV2080_CTRL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS params;
+    NV2080_CTRL_NVLINK_GET_LINK_AND_CLOCK_INFO_PARAMS *pParams;
 
-    portMemSet(&params, 0, sizeof(params));
-    params.linkMask = pKernelNvlink->enabledLinks;
-    params.bSublinkStateInst = NV_TRUE;
+    pParams = portMemAllocStackOrHeap(sizeof(*pParams));
+    if (pParams == NULL)
+    {
+        return 0;
+    }
+
+    portMemSet(pParams, 0, sizeof(*pParams));
+    pParams->linkMask = pKernelNvlink->enabledLinks;
 
     status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
                                  NV2080_CTRL_CMD_NVLINK_GET_LINK_AND_CLOCK_INFO,
-                                 (void *)&params, sizeof(params));
+                                 pParams, sizeof(*pParams));
     if (status != NV_OK)
-        return 0;
+        goto cleanup;
 
     // Scan enabled links for peer connections
     FOR_EACH_INDEX_IN_MASK(32, i, pKernelNvlink->enabledLinks)
     {
-        if (params.linkInfo[i].bLinkConnectedToPeer)
+        if (pParams->linkInfo[i].bLinkConnectedToPeer)
             peerLinkMask |= NVBIT(i);
     }
     FOR_EACH_INDEX_IN_MASK_END;
 
+cleanup:
+    portMemFreeStackOrHeap(pParams);
     return peerLinkMask;
 }
 
@@ -1305,6 +1315,12 @@ knvlinkSetPowerFeatures_IMPL
                                            (pKernelNvlink->bDisableL2Mode ? NV_FALSE : NV_TRUE));
             }
 
+            break;
+        }
+        case NVLINK_VERSION_50:
+        {
+            pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_L2_POWER_STATE_ENABLED,
+                                        (pKernelNvlink->bDisableL2Mode ? NV_FALSE : NV_TRUE));
             break;
         }
         default:
@@ -1734,6 +1750,7 @@ knvlinkUpdatePostRxDetectLinkMask_IMPL
 )
 {
     NV_STATUS status = NV_OK;
+    NvU32 i;
 
     NV2080_CTRL_NVLINK_GET_LINK_MASK_POST_RX_DET_PARAMS params;
 
@@ -1749,6 +1766,12 @@ knvlinkUpdatePostRxDetectLinkMask_IMPL
     }
 
     pKernelNvlink->postRxDetLinkMask = params.postRxDetLinkMask;
+
+    FOR_EACH_INDEX_IN_MASK(32, i, pKernelNvlink->enabledLinks)
+    {
+        pKernelNvlink->nvlinkLinks[i].laneRxdetStatusMask = params.laneRxdetStatusMask[i];
+    }
+    FOR_EACH_INDEX_IN_MASK_END;
 
     return NV_OK;
 }
@@ -1779,7 +1802,7 @@ knvlinkCopyNvlinkDeviceInfo_IMPL
 
     if (status == NV_ERR_NOT_SUPPORTED)
     {
-        NV_PRINTF(LEVEL_WARNING, "NVLink is unavailable\n");
+        NV_PRINTF(LEVEL_INFO, "NVLink is unavailable\n");
         return status;
     }
     else if (status != NV_OK)
@@ -1987,8 +2010,6 @@ knvlinkSyncLaneShutdownProps_IMPL
 
     portMemSet(&params, 0, sizeof(params));
 
-    params.bLaneShutdownEnabled  =
-        pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_LANE_SHUTDOWN_ENABLED);
     params.bLaneShutdownOnUnload =
         pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_LANE_SHUTDOWN_ON_UNLOAD);
 
@@ -2132,7 +2153,7 @@ knvlinkFatalErrorRecovery_IMPL
     status = osQueueWorkItemWithFlags(pGpu, knvlinkFatalErrorRecovery_WORKITEM, NULL,
                                       (OS_QUEUE_WORKITEM_FLAGS_LOCK_SEMA |
                                         OS_QUEUE_WORKITEM_FLAGS_LOCK_API_RW |
-                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE_RW));
+                                        OS_QUEUE_WORKITEM_FLAGS_LOCK_GPU_GROUP_SUBDEVICE));
 
      return status;
 }

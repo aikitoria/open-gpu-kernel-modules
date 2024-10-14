@@ -265,7 +265,6 @@ _vidmemPmaAllocate
     allocOptions.flags |= PMA_ALLOCATE_FORCE_ALIGNMENT;
     allocOptions.alignment = NV_MAX(sizeAlign, pageSize);
 
-
     // Get the number of pages to be allocated by PMA
     NV_CHECK_OR_RETURN(LEVEL_ERROR,
         (NV_DIV_AND_CEIL(size, pageSize) <= NV_U32_MAX),
@@ -1434,12 +1433,16 @@ vidmemCheckCopyPermissions_IMPL
 {
     Memory           *pMemory               = staticCast(pVideoMemory, Memory);
     OBJGPU           *pSrcGpu               = pMemory->pGpu;
-    NvHandle          hSrcClient            = RES_GET_CLIENT_HANDLE(pVideoMemory);
-    NvHandle          hDstClient            = RES_GET_CLIENT_HANDLE(pDstDevice);
+    RsClient         *pSrcClient            = RES_GET_CLIENT(pVideoMemory);
+    RsClient         *pDstClient            = RES_GET_CLIENT(pDstDevice);
     KernelMIGManager *pSrcKernelMIGManager  = GPU_GET_KERNEL_MIG_MANAGER(pSrcGpu);
     KernelMIGManager *pDstKernelMIGManager  = GPU_GET_KERNEL_MIG_MANAGER(pDstGpu);
-    NvBool            bSrcClientKernel      = (rmclientGetCachedPrivilegeByHandle(hSrcClient) >= RS_PRIV_LEVEL_KERNEL);
-    NvBool            bDstClientKernel      = (rmclientGetCachedPrivilegeByHandle(hDstClient) >= RS_PRIV_LEVEL_KERNEL);
+    NvBool            bSrcClientKernel      =
+        (rmclientGetCachedPrivilege(dynamicCast(pSrcClient, RmClient)) >=
+         RS_PRIV_LEVEL_KERNEL);
+    NvBool            bDstClientKernel      =
+        (rmclientGetCachedPrivilege(dynamicCast(pDstClient, RmClient)) >=
+         RS_PRIV_LEVEL_KERNEL);
 
     //
     // XXX: In case of MIG memory, duping across GPU instances is not allowed

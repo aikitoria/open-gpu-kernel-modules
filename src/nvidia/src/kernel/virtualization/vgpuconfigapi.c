@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -28,14 +28,13 @@
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mem_sys/kern_mem_sys.h"
 #include "gpu/mem_mgr/heap.h"
-#include "gpu/bif/kernel_bif.h"
 #include "kernel/gpu/fifo/kernel_sched_mgr.h"
 #include "virtualization/kernel_vgpu_mgr.h"
 #include "virtualization/hypervisor/hypervisor.h"
 #include "rmapi/control.h"
 #include "nv-hypervisor.h"
 #include "ctrl/ctrla081.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "kernel/gpu/fifo/kernel_fifo.h"
 
 NV_STATUS
@@ -817,6 +816,20 @@ vgpuconfigapiCtrlCmdVgpuConfigGetCapability_IMPL
             pGetCapabilityParams->state = pPhysGpuInfo->computeMediaEngineEnabled;
             break;
         }
+        case NVA081_CTRL_VGPU_CAPABILITY_WARM_UPDATE:
+        {
+            /*
+             * As per our current requirement, the capability is supported on all GPUs
+             * and hence we are turning true always without checking for input device.
+             * If we decided not to support any GPU, this needs to be modified.
+             */
+            pGetCapabilityParams->state = NV_TRUE;
+            if (IS_MIG_ENABLED(pGpu))
+            {
+                pGetCapabilityParams->state = NV_FALSE;
+            }
+            break;
+        }
         default:
         {
             rmStatus = NV_ERR_INVALID_ARGUMENT;
@@ -1161,7 +1174,9 @@ vgpuconfigapiCtrlCmdGetVgpuDriversCaps_IMPL
     NVA081_CTRL_GET_VGPU_DRIVER_CAPS_PARAMS *pParams
 )
 {
-    pParams->heterogeneousMultiVgpuSupported = kvgpumgrIsHeterogeneousVgpuSupported();
+    pParams->heterogeneousMultiVgpuSupported    = kvgpumgrIsHeterogeneousVgpuSupported();
+    pParams->warmUpdateSupported                = kvgpumgrIsVgpuWarmUpdateSupported();
+
     return NV_OK;
 }
 
@@ -1264,27 +1279,3 @@ vgpuconfigapiCtrlCmdVgpuSetVmName_IMPL
     return NV_OK;
 }
 
-NV_STATUS
-vgpuconfigapiCtrlCmdVgpuConfigGetMigrationBandwidth_IMPL
-(
-    VgpuConfigApi *pVgpuConfigApi,
-    NVA081_CTRL_VGPU_CONFIG_GET_MIGRATION_BANDWIDTH_PARAMS *pParams
-)
-{
-    OBJGPU *pGpu = GPU_RES_GET_GPU(pVgpuConfigApi);
-    KernelBif *pKernelBif  = GPU_GET_KERNEL_BIF(pGpu);
-    NV_STATUS rmStatus = NV_OK;
-
-    if (IS_VIRTUAL(pGpu))
-    {
-        return NV_ERR_NOT_SUPPORTED;
-    }
-
-    rmStatus = kbifGetMigrationBandwidth_HAL(pGpu, pKernelBif, &pParams->migrationBandwidth);
-    if (rmStatus != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "Failed to get Migration Bandwidth rmStatus 0x%x\n",rmStatus);
-    }
-
-    return rmStatus;
-}

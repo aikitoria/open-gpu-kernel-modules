@@ -172,7 +172,7 @@ kgraphicsAllocGrGlobalCtxBuffers_TU102
             memmgrSetMemDescPageSize_HAL(pGpu, pMemoryManager, *ppMemDesc, AT_GPU, RM_ATTR_PAGE_SIZE_4KB);
             NV_ASSERT_OK_OR_RETURN(memdescSetCtxBufPool(*ppMemDesc, pCtxBufPool));
         }
-        memdescTagAllocList(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_113, 
+        memdescTagAllocList(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_113,
                     (*ppMemDesc), pCtxAttr[GR_GLOBALCTX_BUFFER_RTV_CB].pAllocList);
         NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, status);
     }
@@ -196,6 +196,11 @@ kgraphicsInitializeBug4208224WAR_TU102
     NV_STATUS   status = NV_OK;
     RM_API     *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
     NV2080_CTRL_INTERNAL_KGR_INIT_BUG4208224_WAR_PARAMS params = {0};
+
+    if (pKernelGraphics->bug4208224Info.bConstructed)
+    {
+        return NV_OK;
+    }
 
     NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
         kgraphicsCreateBug4208224Channel_HAL(pGpu, pKernelGraphics));

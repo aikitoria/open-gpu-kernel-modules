@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2016-2023 NVIDIA Corporation
+    Copyright (c) 2016-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -1601,7 +1601,7 @@ static void hmm_va_block_cpu_unpopulate_chunk(uvm_va_block_t *va_block,
     UVM_ASSERT(uvm_cpu_chunk_get_size(chunk) == PAGE_SIZE);
 
     uvm_cpu_chunk_remove_from_block(va_block, chunk_nid, page_index);
-    uvm_va_block_unmap_cpu_chunk_on_gpus(va_block, chunk, page_index);
+    uvm_va_block_unmap_cpu_chunk_on_gpus(va_block, chunk);
     uvm_cpu_chunk_free(chunk);
 }
 
@@ -1706,8 +1706,6 @@ static void gpu_chunk_remove(uvm_va_block_t *va_block,
         return;
     }
 
-    // TODO: Bug 3898467: unmap indirect peers when freeing GPU chunks
-
     uvm_mmu_chunk_unmap(gpu_chunk, &va_block->tracker);
     gpu_state->chunks[page_index] = NULL;
 }
@@ -1755,8 +1753,6 @@ static NV_STATUS gpu_chunk_add(uvm_va_block_t *va_block,
     status = uvm_mmu_chunk_map(gpu_chunk);
     if (status != NV_OK)
         return status;
-
-    // TODO: Bug 3898467: map indirect peers.
 
     uvm_processor_mask_set(&va_block->resident, id);
     uvm_page_mask_set(&gpu_state->resident, page_index);
@@ -2278,7 +2274,7 @@ static NV_STATUS populate_region(uvm_va_block_t *va_block,
             // uvm_hmm_invalidate() should handle that if the underlying page
             // is invalidated.
             // Also note there can be an allocated page due to GPU-to-GPU
-            // migration between non-peer or indirect peer GPUs.
+            // migration between non-peer GPUs.
             continue;
         }
 

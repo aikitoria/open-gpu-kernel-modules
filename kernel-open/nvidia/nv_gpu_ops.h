@@ -45,11 +45,6 @@ typedef struct gpuObject        *gpuObjectHandle;
 
 typedef struct gpuRetainedChannel_struct gpuRetainedChannel;
 
-
-NV_STATUS calculatePCIELinkRateMBps(NvU32 lanes,
-                                    NvU32 pciLinkMaxSpeed,
-                                    NvU32 *pcieLinkRate);
-
 NV_STATUS nvGpuOpsCreateSession(struct gpuSession **session);
 
 NV_STATUS nvGpuOpsDestroySession(struct gpuSession *session);

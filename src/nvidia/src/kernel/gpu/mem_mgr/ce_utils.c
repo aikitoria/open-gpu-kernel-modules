@@ -108,7 +108,6 @@ ceutilsConstruct_IMPL
 
     NvBool bMIGInUse = IS_MIG_IN_USE(pGpu);
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
-
     pCeUtils->pGpu = pGpu;
 
     if (FLD_TEST_DRF(0050_CEUTILS, _FLAGS, _FIFO_LITE, _TRUE, allocFlags))
@@ -168,6 +167,9 @@ ceutilsConstruct_IMPL
     pChannel->hVASpaceId = NV01_NULL_OBJECT;
     pChannel->bUseVasForCeCopy = FLD_TEST_DRF(0050_CEUTILS, _FLAGS, _VIRTUAL_MODE, _TRUE, allocFlags);
 
+    // Variable to indicate usage of either BAR1 or BAR2
+    pChannel->bUseBar1 = FLD_TEST_DRF(0050_CEUTILS, _FLAGS, _NO_BAR1_USE, _FALSE, allocFlags);
+
     pChannel->bSecure = FLD_TEST_DRF(0050_CEUTILS, _FLAGS, _CC_SECURE, _TRUE, allocFlags);
 
     // Detect if we can enable fast scrub on this channel
@@ -175,6 +177,7 @@ ceutilsConstruct_IMPL
     NV_ASSERT_OR_GOTO(status == NV_OK, free_channel);
 
     if (((pCeUtils->hTdCopyClass == HOPPER_DMA_COPY_A)
+        || (pCeUtils->hTdCopyClass == BLACKWELL_DMA_COPY_A)
         ) && !pChannel->bUseVasForCeCopy)
     {
         pChannel->type = FAST_SCRUBBER_CHANNEL;
@@ -256,6 +259,7 @@ ceutilsDestruct_IMPL
     OBJGPU *pGpu = pCeUtils->pGpu;
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
     RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    NvU32 transferFlags = pChannel->bUseBar1 ? TRANSFER_FLAGS_USE_BAR1 : TRANSFER_FLAGS_NONE;
 
     if ((pChannel->bClientUserd) && (pChannel->pControlGPFifo != NULL))
     {
@@ -269,7 +273,7 @@ ceutilsDestruct_IMPL
         }
         else
         {
-            memmgrMemDescEndTransfer(pMemoryManager, pChannel->pUserdMemdesc, TRANSFER_FLAGS_USE_BAR1);
+            memmgrMemDescEndTransfer(pMemoryManager, pChannel->pUserdMemdesc, transferFlags);
             pChannel->pControlGPFifo = NULL;
         }
     }
@@ -282,7 +286,7 @@ ceutilsDestruct_IMPL
         }
         else
         {
-            memmgrMemDescEndTransfer(pMemoryManager, pChannel->pChannelBufferMemdesc, TRANSFER_FLAGS_USE_BAR1);
+            memmgrMemDescEndTransfer(pMemoryManager, pChannel->pChannelBufferMemdesc, transferFlags);
             pChannel->pbCpuVA = NULL;
         }
     }
@@ -295,7 +299,7 @@ ceutilsDestruct_IMPL
         }
         else
         {
-            memmgrMemDescEndTransfer(pMemoryManager, pChannel->pErrNotifierMemdesc, TRANSFER_FLAGS_USE_BAR1);
+            memmgrMemDescEndTransfer(pMemoryManager, pChannel->pErrNotifierMemdesc, transferFlags);
             pChannel->pTokenFromNotifier = NULL;
         }
     }
@@ -388,9 +392,9 @@ _ceutilsSubmitPushBuffer
     // Use BAR1 if CPU access is allowed, otherwise allocate and init shadow
     // buffer for DMA access
     //
-    NvU32 transferFlags = (TRANSFER_FLAGS_USE_BAR1     |
+    NvU32 transferFlags = (pChannel->bUseBar1 ? TRANSFER_FLAGS_USE_BAR1 : TRANSFER_FLAGS_NONE) |
                            TRANSFER_FLAGS_SHADOW_ALLOC | 
-                           TRANSFER_FLAGS_SHADOW_INIT_MEM);
+                           TRANSFER_FLAGS_SHADOW_INIT_MEM;
     NV_PRINTF(LEVEL_INFO, "Actual size of copying to be pushed: %x\n", pChannelPbInfo->size);
 
     status = channelWaitForFreeEntry(pChannel, &putIndex);

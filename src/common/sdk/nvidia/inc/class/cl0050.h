@@ -58,6 +58,11 @@ typedef struct NV0050_ALLOCATION_PARAMETERS {
 #define NV0050_CEUTILS_FLAGS_FIFO_LITE_FALSE    (0x00000000)
 #define NV0050_CEUTILS_FLAGS_FIFO_LITE_TRUE     (0x00000001)
 
+// Whether the CeUtils will use BAR1 or BAR2 for data copy
+#define NV0050_CEUTILS_FLAGS_NO_BAR1_USE             3:3
+#define NV0050_CEUTILS_FLAGS_NO_BAR1_USE_FALSE  (0x00000000)
+#define NV0050_CEUTILS_FLAGS_NO_BAR1_USE_TRUE   (0x00000001)
+
 // Force a specific CE engine to be used be setting forceCeId
 #define NV0050_CEUTILS_FLAGS_FORCE_CE_ID             4:4
 #define NV0050_CEUTILS_FLAGS_FORCE_CE_ID_FALSE  (0x00000000)

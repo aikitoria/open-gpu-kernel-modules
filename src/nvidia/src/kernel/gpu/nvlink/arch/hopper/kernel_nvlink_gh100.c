@@ -29,7 +29,7 @@
 #include "gpu/gpu.h"
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "nverror.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "gpu_mgr/gpu_mgr.h"
 #include "gpu/gpu_fabric_probe.h"
 #include "platform/sli/sli.h"
@@ -354,15 +354,23 @@ NV_STATUS
 knvlinkLogAliDebugMessages_GH100
 (
     OBJGPU       *pGpu,
-    KernelNvlink *pKernelNvlink
+    KernelNvlink *pKernelNvlink,
+    NvBool        bFinal
 )
 {
-    NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS *nvlinkErrInfoParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
-    portMemSet(nvlinkErrInfoParams, 0, sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
-    nvlinkErrInfoParams->ErrInfoFlags |= NV2080_CTRL_NVLINK_ERR_INFO_FLAGS_ALI_STATUS;
+    NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS *nvlinkErrInfoParams;
     NvU32         i;
     // This is a Physical, Hopper specific HAL for debug purposes.
-    NV_STATUS status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
+    NV_STATUS status;
+
+    if (bFinal)
+        return NV_OK;
+
+    nvlinkErrInfoParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
+    portMemSet(nvlinkErrInfoParams, 0, sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
+    nvlinkErrInfoParams->ErrInfoFlags |= NV2080_CTRL_NVLINK_ERR_INFO_FLAGS_ALI_STATUS;
+
+    status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
                         NV2080_CTRL_CMD_NVLINK_GET_ERR_INFO,
                         (void *)nvlinkErrInfoParams,
                         sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));

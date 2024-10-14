@@ -35,10 +35,13 @@
 #define GPU_FABRIC_PROBE_DEFAULT_PROBE_SLOWDOWN_THRESHOLD 10
 
 typedef struct GPU_FABRIC_PROBE_INFO_KERNEL GPU_FABRIC_PROBE_INFO_KERNEL;
+typedef struct GPU_FABRIC_PROBE_INFO_PHYSICAL GPU_FABRIC_PROBE_INFO_PHYSICAL;
 
 NV_STATUS gpuFabricProbeStart(OBJGPU *pGpu,
                               GPU_FABRIC_PROBE_INFO_KERNEL **ppGpuFabricProbeInfoKernel);
 void gpuFabricProbeStop(GPU_FABRIC_PROBE_INFO_KERNEL *pGpuFabricProbeInfoKernel);
+void gpuFabricProbeStopPhysical(GPU_FABRIC_PROBE_INFO_PHYSICAL *pGpuFabricProbeInfoPhysical,
+                                NvU32 gfId);
 
 void gpuFabricProbeSuspend(GPU_FABRIC_PROBE_INFO_KERNEL *pGpuFabricProbeInfoKernel);
 NV_STATUS gpuFabricProbeResume(GPU_FABRIC_PROBE_INFO_KERNEL *pGpuFabricProbeInfoKernel);
@@ -72,6 +75,6 @@ NV_STATUS gpuFabricProbeReceivePhysicalCallback(NvU32 gpuInstance, NvU64 *pNotif
             NV2080_CTRL_NVLINK_INBAND_RECEIVED_DATA_PARAMS *pInbandRcvParams);
 NV_STATUS gpuFabricProbeReceiveUpdatePhysicalCallback(NvU32 gpuInstance, NvU64 *pNotifyGfIdMask,
             NV2080_CTRL_NVLINK_INBAND_RECEIVED_DATA_PARAMS *pInbandRcvParams);
-
+NV_STATUS gpuFabricProbeGetGfid(OBJGPU *pGpu, NvU32 *pGfid);
 
 #endif // GPU_FABRIC_PROBE_H

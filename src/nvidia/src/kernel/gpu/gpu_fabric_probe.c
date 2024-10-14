@@ -289,6 +289,11 @@ gpuFabricProbeGetNumProbeReqs
     LOCK_ASSERT_AND_RETURN(rmDeviceGpuLockIsOwner(
                            gpuGetInstance(pGpuFabricProbeInfoKernel->pGpu)));
 
+    //
+    // This function gets called from CUDA stack to check the probe state (NV2080_CTRL_CMD_GET_GPU_FABRIC_PROBE_INFO).
+    // The value returned by this function determines if probe is started or not.
+    // We just return a non-zero value here for vgpu, because we don't track fabric probe stats in the guests yet.
+    //
     if (IS_VIRTUAL(pGpu))
     {
         *numProbes = 1;

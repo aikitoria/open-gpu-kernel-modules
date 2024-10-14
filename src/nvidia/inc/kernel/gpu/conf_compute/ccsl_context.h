@@ -66,10 +66,10 @@ struct ccslContext_t
     NvU32 globalKeyIdOut;
 
     void *openrmCtx;
+    void *pConfCompute;
 
     MEMORY_DESCRIPTOR *pMemDesc;
     volatile CC_CRYPTOBUNDLE_STATS *pEncStatsBuffer;
-    void * pConfCompute;
 
     pDecryptBundle pDecryptBundles;
     NvU32 currDecryptBundle;

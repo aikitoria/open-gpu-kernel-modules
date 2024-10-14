@@ -43,6 +43,7 @@
 #include "kernel/gpu/fifo/kernel_channel.h"
 #include "gpu/conf_compute/conf_compute_api.h"
 #include "class/clcb33.h"
+#include "spdm/rmspdmvendordef.h"
 
 /*!
  * Local object related functions
@@ -50,8 +51,8 @@
 static NV_STATUS _confComputeInitRegistryOverrides(OBJGPU *, ConfidentialCompute*);
 static NvU32 _confComputeGetKeyspaceSize(NvU16 keyspace);
 
-#define KEY_ROTATION_THRESHOLD_DELTA 100000000ull
-#define KEY_ROTATION_TIMEOUT         5
+#define KEY_ROTATION_THRESHOLD_DELTA 20000000ull
+#define KEY_ROTATION_TIMEOUT         10
 
 NV_STATUS
 confComputeConstructEngine_IMPL(OBJGPU                  *pGpu,
@@ -167,6 +168,7 @@ confComputeConstructEngine_IMPL(OBJGPU                  *pGpu,
     {
         pConfCompute->keyRotationState[i] = KEY_ROTATION_STATUS_IDLE;
         pConfCompute->keyRotationTimeoutInfo[i].pTimer = NULL;
+        pConfCompute->keyRotationCallbackCount[i] = 0;
         pConfCompute->keyRotationCount[i] = 0;
     }
     portMemSet(pConfCompute->aggregateStats, 0, sizeof(pConfCompute->aggregateStats));
@@ -203,14 +205,6 @@ _confComputeInitRegistryOverrides
         if (FLD_TEST_DRF(_REG_STR, _RM_CONFIDENTIAL_COMPUTE, _GPUS_READY_CHECK, _DISABLED, data))
         {
             pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_GPUS_READY_CHECK_ENABLED, NV_FALSE);
-        }
-
-        if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_CONF_COMPUTE_EARLY_INIT, &data)
-            == NV_OK) && (data == NV_REG_STR_RM_CONF_COMPUTE_EARLY_INIT_ENABLED))
-        {
-            NV_PRINTF(LEVEL_INFO, "Confidential Compute early init enabled via regkey override.\n");
-            pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLE_EARLY_INIT, NV_TRUE);
-            pConfCompute->gspProxyRegkeys |= DRF_DEF(GSP, _PROXY_REG, _CONF_COMPUTE_EARLY_INIT, _ENABLE);
         }
 
         if (FLD_TEST_DRF(_REG_STR, _RM_CONFIDENTIAL_COMPUTE, _DEV_MODE_ENABLED, _YES, data))
@@ -272,6 +266,33 @@ _confComputeInitRegistryOverrides
                 NV_PRINTF(LEVEL_ERROR, "SPDM child object creation failed! Status:0x%x\n", status);
                 return status;
             }
+
+            if (osReadRegistryDword(pGpu, NV_REG_STR_RM_CONF_COMPUTE_HEARTBEAT, &data) == NV_OK)
+            {
+                pConfCompute->heartbeatPeriodSec =
+                    DRF_VAL(_REG_STR, _RM_CONF_COMPUTE_HEARTBEAT_PERIOD, _SECONDS, data);
+                if (FLD_TEST_DRF(_REG_STR, _RM_CONF_COMPUTE_HEARTBEAT_PERIOD, _SECONDS, _DISABLE, data))
+                {
+                    NV_PRINTF(LEVEL_ERROR, "SPDM heartbeat disabled via regkey!\n");
+                }
+                else if (pConfCompute->heartbeatPeriodSec < NV_REG_STR_RM_CONF_COMPUTE_HEARTBEAT_PERIOD_SECONDS_MIN ||
+                         pConfCompute->heartbeatPeriodSec > NV_REG_STR_RM_CONF_COMPUTE_HEARTBEAT_PERIOD_SECONDS_MAX)
+                {
+                    // Check for overflow or underflow.
+                    NV_PRINTF(LEVEL_ERROR, "Suggested heartbeat period is invalid. Falling back to default 4 sec.\n");
+                    pConfCompute->heartbeatPeriodSec = SPDM_DEFAULT_HEARTBEAT_PERIOD_IN_SEC;
+                }
+                else
+                {
+                    NV_PRINTF(LEVEL_ERROR, "Overriding default heartbeat period to 0x%x sec\n",
+                            pConfCompute->heartbeatPeriodSec);
+                }
+            }
+            else
+            {
+                // Heartbeat is disabled by default.
+                pConfCompute->heartbeatPeriodSec = 0;
+            }
         }
     }
 
@@ -319,55 +340,55 @@ confComputeEstablishSpdmSessionAndKeys_KERNEL
 {
     NV_STATUS status = NV_OK;
 
-    //
-    // Initialize SPDM session between Guest RM and SPDM Responder on GPU.
-    // The session lifetime will track Confidential Compute object state lifetime.
-    //
-    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_SPDM_ENABLED))
+    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED))
     {
-        // Initialize SPDM context & begin session.
-        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                            spdmContextInit(pGpu, pConfCompute->pSpdm),
-                            ErrorExit);
-        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                            spdmStart(pGpu, pConfCompute->pSpdm),
-                            ErrorExit);
-
-        //
-        // Now that SPDM session is established, we must initialize
-        // keystore for any session-derived keys.
-        //
+        // Initialize keystore first, as it is still needed even if SPDM disabled.
         NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
                             confComputeKeyStoreInit_HAL(pConfCompute),
                             ErrorExit);
 
-        // Store the export master secret in the keystore.
-        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                            spdmRetrieveExportSecret(pGpu, pConfCompute->pSpdm,
-                                                     CC_EXPORT_MASTER_KEY_SIZE_BYTES,
-                                                     confComputeKeyStoreGetExportMasterKey(pConfCompute)),
-                            ErrorExit);
+        if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_SPDM_ENABLED))
+        {
+            //
+            // Initialize SPDM session between Guest RM and SPDM Responder on GPU.
+            // The session lifetime will track Confidential Compute object state lifetime.
+            //
+            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                                spdmContextInit(pGpu, pConfCompute->pSpdm),
+                                ErrorExit);
+            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                                spdmStart(pGpu, pConfCompute->pSpdm),
+                                ErrorExit);          
 
-        // Derive secrets for encrypted communication
-        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                            confComputeDeriveSecrets_HAL(pConfCompute, MC_ENGINE_IDX_GSP),
-                            ErrorExit);
+            // Store the export master secret in the keystore.
+            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                                spdmRetrieveExportSecret(pGpu, pConfCompute->pSpdm,
+                                                        CC_EXPORT_MASTER_KEY_SIZE_BYTES,
+                                                        confComputeKeyStoreGetExportMasterKey(pConfCompute)),
+                                ErrorExit);
 
-        // Initialize encryption contexts for encrypted traffic between Kernel-RM and GSP.
-        NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
-            &pConfCompute->pRpcCcslCtx, CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_CPU_GSP_LOCKED_RPC)));
+            // Derive secrets for encrypted communication
+            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                                confComputeDeriveSecrets_HAL(pConfCompute, MC_ENGINE_IDX_GSP),
+                                ErrorExit);
 
-        NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
-            &pConfCompute->pDmaCcslCtx, CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_CPU_GSP_DMA)));
+            // Initialize encryption contexts for encrypted traffic between Kernel-RM and GSP.
+            NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
+                &pConfCompute->pRpcCcslCtx, CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_CPU_GSP_LOCKED_RPC)));
 
-        NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
-            &pConfCompute->pReplayableFaultCcslCtx,
-            CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_GSP_CPU_REPLAYABLE_FAULT)));
+            NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
+                &pConfCompute->pDmaCcslCtx, CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_CPU_GSP_DMA)));
 
-        NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
-            &pConfCompute->pNonReplayableFaultCcslCtx,
-            CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_GSP_CPU_NON_REPLAYABLE_FAULT)));
+            NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
+                &pConfCompute->pReplayableFaultCcslCtx,
+                CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_GSP_CPU_REPLAYABLE_FAULT)));
+
+            NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
+                &pConfCompute->pNonReplayableFaultCcslCtx,
+                CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_GSP_CPU_NON_REPLAYABLE_FAULT)));
+        }
     }
+
 ErrorExit:
 
     return status;
@@ -394,12 +415,11 @@ _confComputeDeinitSpdmSessionAndKeys
 {
     NV_STATUS status = NV_OK;
 
-    //
-    // Tear down SPDM session between Guest RM and SPDM Responder on GPU.
-    // We must do in pre-unload, before Responder is torn down entirely.
-    //
-    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_SPDM_ENABLED))
+    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED))
     {
+        // Keystore will always be initialized, regardless of whether we use SPDM
+        confComputeKeyStoreDeinit_HAL(pConfCompute);
+
         if (pConfCompute->pSpdm == NULL)
         {
             //
@@ -410,25 +430,31 @@ _confComputeDeinitSpdmSessionAndKeys
             return NV_OK;
         }
 
-        status = spdmContextDeinit(pGpu, pConfCompute->pSpdm, NV_TRUE);
+        //
+        // Tear down SPDM session between Guest RM and SPDM Responder on GPU.
+        // We must do in pre-unload, before Responder is torn down entirely.
+        //
+        if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_SPDM_ENABLED))
+        {
+            status = spdmContextDeinit(pGpu, pConfCompute->pSpdm, NV_TRUE);
+
+            NV_PRINTF(LEVEL_INFO, "SPDM teardown successful.\n");
+
+            // Deinitialize CCSL contexts.
+            ccslContextClear(pConfCompute->pRpcCcslCtx);
+            ccslContextClear(pConfCompute->pDmaCcslCtx);
+            ccslContextClear(pConfCompute->pReplayableFaultCcslCtx);
+            ccslContextClear(pConfCompute->pNonReplayableFaultCcslCtx);
+
+            pConfCompute->pRpcCcslCtx                = NULL;
+            pConfCompute->pDmaCcslCtx                = NULL;
+            pConfCompute->pReplayableFaultCcslCtx    = NULL;
+            pConfCompute->pNonReplayableFaultCcslCtx = NULL;
+            pConfCompute->pGspSec2RpcCcslCtx         = NULL;
+        }
 
         objDelete(pConfCompute->pSpdm);
         pConfCompute->pSpdm = NULL;
-        NV_PRINTF(LEVEL_INFO, "SPDM teardown successful.\n");
-
-        // Deinitialize CCSL contexts.
-        ccslContextClear(pConfCompute->pRpcCcslCtx);
-        ccslContextClear(pConfCompute->pDmaCcslCtx);
-        ccslContextClear(pConfCompute->pReplayableFaultCcslCtx);
-        ccslContextClear(pConfCompute->pNonReplayableFaultCcslCtx);
-
-        pConfCompute->pRpcCcslCtx                = NULL;
-        pConfCompute->pDmaCcslCtx                = NULL;
-        pConfCompute->pReplayableFaultCcslCtx    = NULL;
-        pConfCompute->pNonReplayableFaultCcslCtx = NULL;
-        pConfCompute->pGspSec2RpcCcslCtx         = NULL;
-
-        confComputeKeyStoreDeinit_HAL(pConfCompute);
     }
 
     return status;
@@ -542,22 +568,21 @@ confComputeStatePreUnload_KERNEL
             status = tempStatus;
         }
     }
-    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_SPDM_ENABLED))
+
+    if (IS_GSP_CLIENT(pGpu) && (pConfCompute->heartbeatPeriodSec != 0))
     {
-        if (IS_GSP_CLIENT(pGpu) && (pConfCompute->heartbeatPeriodSec != 0))
-        {
-            tempStatus = spdmUnregisterFromHeartbeats(pGpu, pConfCompute->pSpdm);
-        }
-        else if (!IS_GSP_CLIENT(pGpu))
-        {
-            NV_PRINTF(LEVEL_INFO, "Performing SPDM deinitialization in Pre Unload!\n");
-            tempStatus = _confComputeDeinitSpdmSessionAndKeys(pGpu, pConfCompute);
-        }
-        if (tempStatus != NV_OK)
-        {
-            NV_PRINTF(LEVEL_ERROR, "Failed to deinit spdm 0x%x\n", tempStatus);
-            status = tempStatus;
-        }
+        tempStatus = spdmUnregisterFromHeartbeats(pGpu, pConfCompute->pSpdm);
+    }
+    else if (!IS_GSP_CLIENT(pGpu))
+    {
+        NV_PRINTF(LEVEL_INFO, "Performing SPDM deinitialization in Pre Unload!\n");
+        tempStatus = _confComputeDeinitSpdmSessionAndKeys(pGpu, pConfCompute);
+    }
+
+    if (tempStatus != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to deinit spdm 0x%x\n", tempStatus);
+        status = tempStatus;
     }
 
     return status;
@@ -603,53 +628,6 @@ confComputeStateInitLocked_IMPL
               pConfCompute->ccStaticInfo.bIsBar1Trusted, pConfCompute->ccStaticInfo.bIsPcieTrusted);
 
     return NV_OK;
-}
-
-/*!
- * Sets fatal error state in ConfCompute session by setting GPU ready
- * state to false and invalidating the SPDM session.
- *
- * @param[in] pGpu                     : OBJGPU Pointer
- * @param[in] pConfCompute             : ConfidentialCompute pointer
- */
-void
-confComputeSetErrorState_KERNEL
-(
-    OBJGPU              *pGpu,
-    ConfidentialCompute *pConfCompute
-)
-{
-    OBJSYS                                                     *pSys    = SYS_GET_INSTANCE();
-    OBJGPUMGR                                                  *pGpuMgr = SYS_GET_GPUMGR(pSys);
-    NV_STATUS                                                   status  = NV_OK;
-    RM_API                                                     *pRmApi  = NULL;
-    NV2080_CTRL_CMD_INTERNAL_CONF_COMPUTE_SET_GPU_STATE_PARAMS  params  = {0};
-
-    NV_PRINTF(LEVEL_ERROR, "ConfCompute: Fatal error hit!\n");
-
-    // Set ready state to false
-    pConfCompute->bAcceptClientRequest   = NV_FALSE;
-    pGpuMgr->ccCaps.bAcceptClientRequest = NV_FALSE;
-    pGpuMgr->ccCaps.bFatalFailure        = NV_TRUE;
-    pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
-    status = pRmApi->Control(pRmApi,
-                             pGpu->hInternalClient,
-                             pGpu->hInternalSubdevice,
-                             NV2080_CTRL_CMD_INTERNAL_CONF_COMPUTE_SET_GPU_STATE,
-                             &params,
-                             sizeof(params));
-
-    if (status != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "ConfCompute: Failed setting GPU state to not ready!\n");
-    }
-
-    // Invalidate SPDM session and all keys
-    status = _confComputeDeinitSpdmSessionAndKeys(pGpu, pConfCompute);
-    if (status != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "ConfCompute: Failed tearing down SPDM!: 0x%x!\n", status);
-    }
 }
 
 /*!
@@ -745,6 +723,53 @@ confComputeGetNextChannelForKey_IMPL
 }
 
 /*!
+ * Sets fatal error state in ConfCompute session by setting GPU ready
+ * state to false and invalidating the SPDM session.
+ *
+ * @param[in] pGpu                     : OBJGPU Pointer
+ * @param[in] pConfCompute             : ConfidentialCompute pointer
+ */
+void
+confComputeSetErrorState_KERNEL
+(
+    OBJGPU              *pGpu,
+    ConfidentialCompute *pConfCompute
+)
+{
+    OBJSYS                                                     *pSys    = SYS_GET_INSTANCE();
+    OBJGPUMGR                                                  *pGpuMgr = SYS_GET_GPUMGR(pSys);
+    NV_STATUS                                                   status  = NV_OK;
+    RM_API                                                     *pRmApi  = NULL;
+    NV2080_CTRL_CMD_INTERNAL_CONF_COMPUTE_SET_GPU_STATE_PARAMS  params  = {0};
+
+    NV_PRINTF(LEVEL_ERROR, "ConfCompute: Fatal error hit!\n");
+
+    // Set ready state to false
+    pConfCompute->bAcceptClientRequest   = NV_FALSE;
+    pGpuMgr->ccCaps.bAcceptClientRequest = NV_FALSE;
+    pGpuMgr->ccCaps.bFatalFailure        = NV_TRUE;
+    pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    status = pRmApi->Control(pRmApi,
+                             pGpu->hInternalClient,
+                             pGpu->hInternalSubdevice,
+                             NV2080_CTRL_CMD_INTERNAL_CONF_COMPUTE_SET_GPU_STATE,
+                             &params,
+                             sizeof(params));
+
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "ConfCompute: Failed setting GPU state to not ready!\n");
+    }
+
+    // Invalidate SPDM session and all keys
+    status = _confComputeDeinitSpdmSessionAndKeys(pGpu, pConfCompute);
+    if (status != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "ConfCompute: Failed tearing down SPDM!: 0x%x!\n", status);
+    }
+}
+
+/*!
  * Deinitialize all keys required for the Confidential Compute session.
  *
  * Note: Must occur in destructor, rather than confComputeStateDestroy
@@ -773,7 +798,7 @@ confComputeDestruct_KERNEL
 }
 
 /*!
- * Get key slot from global key 
+ * Get key slot from global key
  *
  * @param[in]  pConfCompute             : ConfidentialCompute pointer
  * @param[in]  globalKeyId              : globalKeyId

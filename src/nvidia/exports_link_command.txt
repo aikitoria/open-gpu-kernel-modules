@@ -1,6 +1,5 @@
 --undefined=rm_disable_adapter
 --undefined=rm_execute_work_item
---undefined=rm_free_os_event
 --undefined=rm_free_private_state
 --undefined=rm_cleanup_file_private
 --undefined=rm_unbind_lock
@@ -200,10 +199,8 @@
 --undefined=rm_ref_dynamic_power
 --undefined=rm_unref_dynamic_power
 --undefined=rm_transition_dynamic_power
---undefined=rm_get_vidmem_power_status
 --undefined=rm_acpi_notify
---undefined=rm_get_dynamic_power_management_status
---undefined=rm_get_gpu_gcx_support
+--undefined=rm_get_power_info
 --undefined=rm_is_iommu_needed_for_sriov
 --undefined=rm_disable_iomap_wc
 --undefined=rm_is_altstack_in_use

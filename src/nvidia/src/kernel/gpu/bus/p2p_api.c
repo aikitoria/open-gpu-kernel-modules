@@ -62,8 +62,7 @@ _p2papiReservePeerID
     NvU32 gpu1Instance = gpuGetInstance(pRemoteGpu);
 
     // loopback request
-    if (
-        !bEgmPeer &&
+    if (!bEgmPeer &&
         (pNv503bAllocParams->hSubDevice == pNv503bAllocParams->hPeerSubDevice))
     {
         *peer1 = *peer2 = 0;
@@ -145,10 +144,11 @@ _p2papiReservePeerID
     }
 
 update_mask:
-        if (bEgmPeer)
-        {
-            NV_PRINTF(LEVEL_INFO, "EGM peer\n");
-        }
+    if (bEgmPeer)
+    {
+        NV_PRINTF(LEVEL_INFO, "EGM peer\n");
+    }
+
     //
     // Does the mapping already exist between the given pair of GPUs using the peerIDs
     // peer1 and peer2 respectively ?
@@ -281,6 +281,7 @@ p2papiConstruct_IMPL
 
     subDevicePeerIdMask     = pNv503bAllocParams->subDevicePeerIdMask;
     peerSubDevicePeerIdMask = pNv503bAllocParams->peerSubDevicePeerIdMask;
+
     NvU32                        egmPeer1;
     NvU32                        egmPeer2;
     NvU32                        subDeviceEgmPeerIdMask;
@@ -343,6 +344,7 @@ p2papiConstruct_IMPL
         {
             return NV_ERR_INVALID_ARGUMENT;
         }
+
         if (pNv503bAllocParams->subDeviceEgmPeerIdMask != pNv503bAllocParams->peerSubDeviceEgmPeerIdMask)
         {
             return NV_ERR_INVALID_ARGUMENT;
@@ -744,6 +746,7 @@ p2papiDestruct_IMPL
                                                      pRemoteGpu, pRemoteKernelBus,
                                                      pP2PApi->peerId1, pP2PApi->peerId2,
                                                      pP2PApi->attributes), end);
+
         if (!FLD_TEST_DRF(_P2PAPI, _ATTRIBUTES, _LINK_TYPE, _SPA, pP2PApi->attributes) &&
             memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pLocalGpu)) &&
             memmgrIsLocalEgmEnabled(GPU_GET_MEMORY_MANAGER(pRemoteGpu)) &&

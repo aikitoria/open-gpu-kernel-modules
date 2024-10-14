@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,7 +33,7 @@
 #include "core/locks.h"
 #include "core/thread_state.h"
 #include "diagnostics/tracer.h"
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include <os/os.h>
 #include <nv_ref.h>
 #include "gpu_mgr/gpu_mgr.h"
@@ -628,7 +628,7 @@ rmGpuLockFree(NvU32 gpuInst)
 // Disable GPUs Interrupts thus blocking the ISR from
 // entering.
 //
-static void _gpuLocksAcquireDisableInterrupts(NvU32 gpuInst, NvBool bInIsr)
+static void _gpuLocksAcquireDisableInterrupts(NvU32 gpuInst, NvU32 flags)
 {
     OBJGPU *pGpu = gpumgrGetGpu(gpuInst);
 
@@ -653,6 +653,7 @@ static void _gpuLocksAcquireDisableInterrupts(NvU32 gpuInst, NvBool bInIsr)
     if (osLockShouldToggleInterrupts(pGpu))
     {
         Intr *pIntr = GPU_GET_INTR(pGpu);
+        NvBool isIsr = !!(flags & GPU_LOCK_FLAGS_COND_ACQUIRE);
         NvBool bBcEnabled = gpumgrGetBcEnabledStatus(pGpu);
 
         // Always disable intrs for cond code
@@ -666,10 +667,10 @@ static void _gpuLocksAcquireDisableInterrupts(NvU32 gpuInst, NvBool bInIsr)
             tmrRmCallbackIntrDisable(pTmr, pGpu);
         }
 
-        osDisableInterrupts(pGpu, bInIsr);
+        osDisableInterrupts(pGpu, isIsr);
 
         if ((pIntr != NULL) && pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING) &&
-             (bInIsr == NV_FALSE) )
+             (isIsr == NV_FALSE) )
         {
             NvU64 oldIrql;
             NvU32 intrMaskFlags;
@@ -680,21 +681,14 @@ static void _gpuLocksAcquireDisableInterrupts(NvU32 gpuInst, NvBool bInIsr)
             intrMaskFlags &= ~INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE;
             intrSetIntrMaskFlags(pIntr, intrMaskFlags);
 
-            if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
+            // During non-cond RM code, allow some intrs to come in.
+            if (pIntr->getProperty(pIntr, PDB_PROP_INTR_SIMPLIFIED_VBLANK_HANDLING_FOR_CTRL_TREE))
             {
-                // During non-cond RM code, allow some intrs to come in.
-                if (pIntr->getProperty(pIntr, PDB_PROP_INTR_SIMPLIFIED_VBLANK_HANDLING_FOR_CTRL_TREE))
-                {
-                    intrSetDisplayInterruptEnable_HAL(pGpu, pIntr, NV_TRUE,  NULL /* threadstate */);
-                }
-                else
-                {
-                    intrSetIntrMask_HAL(pGpu, pIntr, &pIntr->intrMask.engMaskUnblocked, NULL /* threadstate */);
-                }
+                intrSetDisplayInterruptEnable_HAL(pGpu, pIntr, NV_TRUE,  NULL /* threadstate */);
             }
             else
             {
-                // Lazy case - we will lazily disable Intrs via the ISR as seen
+                intrSetIntrMask_HAL(pGpu, pIntr, &pIntr->intrMask.engMaskUnblocked, NULL /* threadstate */);
             }
 
             intrSetIntrEnInHw_HAL(pGpu, pIntr, intrGetIntrEn(pIntr), NULL /* threadstate */);
@@ -721,7 +715,7 @@ _rmGpuLocksAcquire(NvU32 gpuMask, NvU32 flags, NvU32 module, void *ra, NvU32 *pG
     NvU32     gpuMaskLocked = 0;
     GPULOCK   *pAllocLock = &rmGpuLockInfo.gpuAllocLock;
     GPULOCK   *pGpuLock;
-    NvBool    bHighIrql, bInIsr, bCondAcquireCheck;
+    NvBool    bHighIrql, bCondAcquireCheck;
     NvU32     maxLockableGpuInst;
     NvU64     threadId = portThreadGetCurrentThreadId();
     NvU64     priority = 0;
@@ -733,7 +727,6 @@ _rmGpuLocksAcquire(NvU32 gpuMask, NvU32 flags, NvU32 module, void *ra, NvU32 *pG
     NvU32     loopCount;
 
     bHighIrql = (portSyncExSafeToSleep() == NV_FALSE);
-    bInIsr = portUtilIsInterruptContext();
     bCondAcquireCheck = ((flags & GPU_LOCK_FLAGS_COND_ACQUIRE) != 0);
 
     if (pGpuLockedMask)
@@ -773,18 +766,6 @@ _rmGpuLocksAcquire(NvU32 gpuMask, NvU32 flags, NvU32 module, void *ra, NvU32 *pG
     {
         status = NV_WARN_NOTHING_TO_DO;
         goto done;
-    }
-
-    //
-    // If a read-only lock was requested, check to see if the module is allowed
-    // to take read-only locks
-    //
-    if ((flags & GPU_LOCK_FLAGS_READ) && (module != RM_LOCK_MODULES_NONE))
-    {
-        if ((pSys->gpuLockModuleMask & NVBIT(module)) == 0)
-        {
-            flags &= ~RMAPI_LOCK_FLAGS_READ;
-        }
     }
 
     if ((gpuMask & rmGpuLockInfo.gpusLockableMask) != gpuMask)
@@ -1084,7 +1065,7 @@ per_gpu_lock_acquired:
         if (gpuInst != GPU_INST_ALLOC_LOCK)
         {
             // now disable interrupts
-            _gpuLocksAcquireDisableInterrupts(gpuInst, bInIsr);
+            _gpuLocksAcquireDisableInterrupts(gpuInst, flags);
 
             // mark this one as locked
             gpuMaskLocked |= NVBIT(gpuInst);
@@ -1489,17 +1470,9 @@ static void _gpuLocksReleaseEnableInterrupts(NvU32 gpuInst, NvU32 flags)
             intrMaskFlags |= INTR_MASK_FLAGS_ISR_SKIP_MASK_UPDATE;
             intrSetIntrMaskFlags(pIntr, intrMaskFlags);
 
-            if (pIntr->getProperty(pIntr, PDB_PROP_INTR_USE_INTR_MASK_FOR_LOCKING))
-            {
-                // Allow all intrs to be reflected and come in.
-                bitVectorSetAll(&engines);
-                intrSetIntrMask_HAL(pGpu, pIntr, &engines, NULL /* threadstate */);
-            }
-            else
-            {
-                // Lazy case - Enable all engine intrs that may have been disabled via the ISR
-                bitVectorClrAll(&pIntr->intrMask.engMaskIntrsDisabled);
-            }
+            // Allow all intrs to be reflected and come in.
+            bitVectorSetAll(&engines);
+            intrSetIntrMask_HAL(pGpu, pIntr, &engines, NULL /* threadstate */);
 
             rmIntrMaskLockRelease(pGpu, oldIrql);
         }

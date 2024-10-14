@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2013-2023 NVIDIA Corporation
+    Copyright (c) 2013-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -58,7 +58,7 @@
 #ifndef _UVM_H_
 #define _UVM_H_
 
-#define UVM_API_LATEST_REVISION 11
+#define UVM_API_LATEST_REVISION 12
 
 #if !defined(UVM_API_REVISION)
 #error "please define UVM_API_REVISION macro to a desired version number or UVM_API_LATEST_REVISION macro"
@@ -167,7 +167,7 @@ NV_STATUS UvmSetDriverVersion(NvU32 major, NvU32 changelist);
 //
 // Error codes:
 //     NV_ERR_NOT_SUPPORTED:
-//         The Linux kernel is not able to support UVM. This could be because
+//         The kernel is not able to support UVM. This could be because
 //         the kernel is too old, or because it lacks a feature that UVM
 //         requires. The kernel log will have details.
 //
@@ -3473,8 +3473,7 @@ NV_STATUS UvmToolsDestroySession(UvmToolsSessionHandle session);
 //
 
 #if UVM_API_REV_IS_AT_MOST(10)
-// This is deprecated and replaced by sizeof(UvmToolsEventControlData_V1) or
-// sizeof(UvmToolsEventControlData_V2).
+// This is deprecated and replaced by sizeof(UvmToolsEventControlData).
 NvLength UvmToolsGetEventControlSize(void);
 
 // This is deprecated and replaced by sizeof(UvmEventEntry_V1) or
@@ -3497,9 +3496,7 @@ NvLength UvmToolsGetNumberOfCounters(void);
 //
 //     version: (INPUT)
 //         Requested version for events or counters.
-//         See UvmEventEntry_V1 and UvmEventEntry_V2.
-//         UvmToolsEventControlData_V2::version records the entry version that
-//         will be generated.
+//         See UvmToolsEventQueueVersion.
 //
 //     event_buffer: (INPUT)
 //         User allocated buffer. Must be page-aligned. Must be large enough to
@@ -3512,8 +3509,7 @@ NvLength UvmToolsGetNumberOfCounters(void);
 //
 //     event_control (INPUT)
 //         User allocated buffer. Must be page-aligned. Must be large enough to
-//         hold UvmToolsEventControlData_V1 if version is UvmEventEntry_V1 or
-//         UvmToolsEventControlData_V2 (although single page-size allocation
+//         hold UvmToolsEventControlData (although single page-size allocation
 //         should be more than enough). Gets pinned until queue is destroyed.
 //
 //     queue: (OUTPUT)
@@ -3524,9 +3520,15 @@ NvLength UvmToolsGetNumberOfCounters(void);
 //         Session handle does not refer to a valid session
 //
 //     NV_ERR_INVALID_ARGUMENT:
-//         The version is not UvmEventEntry_V1 or UvmEventEntry_V2.
+//         The version is not UvmToolsEventQueueVersion_V1 or
+//         UvmToolsEventQueueVersion_V2.
 //         One of the parameters: event_buffer, event_buffer_size, event_control
 //         is not valid
+//
+//     NV_ERR_NOT_SUPPORTED:
+//         The requested version queue could not be created
+//         (i.e., the UVM kernel driver is older and doesn't support
+//         UvmToolsEventQueueVersion_V2).
 //
 //     NV_ERR_INSUFFICIENT_RESOURCES:
 //         There could be multiple reasons for this error. One would be that
@@ -3980,57 +3982,51 @@ NV_STATUS UvmToolsWriteProcessMemory(UvmToolsSessionHandle  session,
 //     version: (INPUT)
 //         Requested version for the UUID table returned. The version must
 //         match the requested version of the event queue created with
-//         UvmToolsCreateEventQueue().
-//         See UvmEventEntry_V1 and UvmEventEntry_V2.
+//         UvmToolsCreateEventQueue(). See UvmToolsEventQueueVersion.
+//         If the version of the event queue does not match the version of the
+//         UUID table, the behavior is undefined.
 //
 //     table: (OUTPUT)
 //         Array of processor UUIDs, including the CPU's UUID which is always
-//         at index zero.  The srcIndex and dstIndex fields of the
-//         UvmEventMigrationInfo struct index this array.  Unused indices will
-//         have a UUID of zero. Version UvmEventEntry_V1 only uses GPU UUIDs
-//         for the UUID of the physical GPU and only supports a single SMC
-//         partition registered per process. Version UvmEventEntry_V2 supports
-//         multiple SMC partitions registered per process and uses physical GPU
-//         UUIDs if the GPU is not SMC capable or SMC enabled and GPU instance
-//         UUIDs for SMC partitions.
-//         The table pointer can be NULL in which case, the size of the table
-//         needed to hold all the UUIDs is returned in 'count'.
-//
-//     table_size: (INPUT)
-//         The size of the table in number of array elements. This can be
-//         zero if the table pointer is NULL.
-//
-//     count: (OUTPUT)
-//         On output, it is set by UVM to the number of UUIDs needed to hold
-//         all the UUIDs, including any gaps in the table due to unregistered
-//         GPUs.
+//         at index zero. The number of elements in the array must be greater
+//         or equal to UVM_MAX_PROCESSORS_V1 if the version is
+//         UvmToolsEventQueueVersion_V1 and UVM_MAX_PROCESSORS if the version is
+//         UvmToolsEventQueueVersion_V2.
+//         The srcIndex and dstIndex fields of the UvmEventMigrationInfo struct
+//         index this array. Unused indices will have a UUID of zero.
+//         If version is UvmToolsEventQueueVersion_V1 then the reported UUID
+//         will be that of the corresponding physical GPU, even if multiple SMC
+//         partitions are registered under that physical GPU. If version is
+//         UvmToolsEventQueueVersion_V2 then the reported UUID will be the GPU
+//         instance UUID if SMC is enabled, otherwise it will be the UUID of
+//         the physical GPU.
 //
 // Error codes:
 //     NV_ERR_INVALID_ADDRESS:
-//         writing to table failed or the count pointer was invalid.
+//         writing to table failed.
 //
 //     NV_ERR_INVALID_ARGUMENT:
-//         The version is not UvmEventEntry_V1 or UvmEventEntry_V2.
-//         The count pointer is NULL.
-//         See UvmToolsEventQueueVersion.
+//         The version is not UvmToolsEventQueueVersion_V1 or
+//         UvmToolsEventQueueVersion_V2.
 //
-//     NV_WARN_MISMATCHED_TARGET:
-//         The kernel returned a table suitable for UvmEventEntry_V1 events.
-//         (i.e., the kernel is older and doesn't support UvmEventEntry_V2).
+//     NV_ERR_NOT_SUPPORTED:
+//         The kernel is not able to support the requested version
+//         (i.e., the UVM kernel driver is older and doesn't support
+//         UvmToolsEventQueueVersion_V2).
 //
 //     NV_ERR_NO_MEMORY:
 //         Internal memory allocation failed.
 //------------------------------------------------------------------------------
-#if UVM_API_REV_IS_AT_MOST(10)
-NV_STATUS UvmToolsGetProcessorUuidTable(UvmToolsSessionHandle  session,
-                                        NvProcessorUuid       *table,
-                                        NvLength              *count);
-#else
+#if UVM_API_REV_IS_AT_MOST(11)
 NV_STATUS UvmToolsGetProcessorUuidTable(UvmToolsSessionHandle      session,
                                         UvmToolsEventQueueVersion  version,
                                         NvProcessorUuid           *table,
                                         NvLength                   table_size,
                                         NvLength                  *count);
+#else
+NV_STATUS UvmToolsGetProcessorUuidTable(UvmToolsSessionHandle     session,
+                                        UvmToolsEventQueueVersion version,
+                                        NvProcessorUuid          *table);
 #endif
 
 //------------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2015-2023 NVIDIA Corporation
+    Copyright (c) 2015-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -275,7 +275,6 @@ long uvm_test_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TEST_SET_PAGE_THRASHING_POLICY,    uvm_test_set_page_thrashing_policy);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TEST_PMM_SYSMEM,                   uvm_test_pmm_sysmem);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TEST_PMM_REVERSE_MAP,              uvm_test_pmm_reverse_map);
-        UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TEST_PMM_INDIRECT_PEERS,           uvm_test_pmm_indirect_peers);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TEST_VA_SPACE_MM_RETAIN,           uvm_test_va_space_mm_retain);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TEST_PMM_CHUNK_WITH_ELEVATED_PAGE, uvm_test_pmm_chunk_with_elevated_page);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TEST_VA_SPACE_INJECT_ERROR,        uvm_test_va_space_inject_error);

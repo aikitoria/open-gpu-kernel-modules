@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -211,7 +211,6 @@ kfifoGenerateWorkSubmitToken_GA100
 
     if (!RMCFG_FEATURE_PLATFORM_GSP || (IS_VGPU_GSP_PLUGIN_OFFLOAD_ENABLED(pGpu) && IS_GFID_VF(gfId)))
     {
-
         // TODO: Remove check on Ampere. Bug 200606706.
         if (!bUsedForHost && IS_GFID_VF(gfId))
         {
@@ -245,7 +244,7 @@ kfifoGenerateWorkSubmitToken_GA100
     }
     else // RMCFG_FEATURE_PLATFORM_GSP
     {
-        NV_ASSERT_OK_OR_RETURN(kfifoGenerateInternalWorkSubmitToken_HAL(pGpu, pKernelFifo, pKernelChannel));
+        NV_ASSERT_OK_OR_RETURN(kfifoGenerateInternalWorkSubmitToken_HAL(pGpu, pKernelFifo, pKernelChannel, &val));
     }
 
     *pGeneratedToken = val;
@@ -794,6 +793,10 @@ kfifoGetClientIdString_GA100
                 return "HUBCLIENT_PTP_X4";
             case NV_PFAULT_CLIENT_HUB_PTP_X5:
                 return "HUBCLIENT_PTP_X5";
+            case NV_PFAULT_CLIENT_HUB_PTP_X6:
+                return "HUBCLIENT_PTP_X6";
+            case NV_PFAULT_CLIENT_HUB_PTP_X7:
+                return "HUBCLIENT_PTP_X7";
             case NV_PFAULT_CLIENT_HUB_NVENC2:
                 return "HUBCLIENT_NVENC2";
             case NV_PFAULT_CLIENT_HUB_VPR_SCRUBBER0:

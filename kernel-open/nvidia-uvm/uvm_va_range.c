@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2015-2023 NVIDIA Corporation
+    Copyright (c) 2015-2024 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -781,15 +781,6 @@ static NV_STATUS uvm_va_range_enable_peer_managed(uvm_va_range_t *va_range, uvm_
 
 
     for_each_va_block_in_va_range(va_range, va_block) {
-        // TODO: Bug 1767224: Refactor the uvm_va_block_set_accessed_by logic
-        //       into uvm_va_block_enable_peer.
-        uvm_mutex_lock(&va_block->lock);
-        status = uvm_va_block_enable_peer(va_block, gpu0, gpu1);
-        uvm_mutex_unlock(&va_block->lock);
-
-        if (status != NV_OK)
-            return status;
-
         // For UVM-Lite at most one GPU needs to map the peer GPU if it's the
         // preferred location, but it doesn't hurt to just try mapping both.
         if (gpu0_accessed_by) {
@@ -1853,7 +1844,7 @@ NV_STATUS uvm_api_alloc_semaphore_pool(UVM_ALLOC_SEMAPHORE_POOL_PARAMS *params, 
 
     if (uvm_api_range_invalid(params->base, params->length))
         return NV_ERR_INVALID_ADDRESS;
-    if (params->gpuAttributesCount > UVM_MAX_GPUS_V2)
+    if (params->gpuAttributesCount > UVM_MAX_GPUS)
         return NV_ERR_INVALID_ARGUMENT;
 
     if (g_uvm_global.conf_computing_enabled && params->gpuAttributesCount == 0)

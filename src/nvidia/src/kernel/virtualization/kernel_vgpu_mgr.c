@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2012-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2012-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -38,8 +38,10 @@
 #include "gpu/mem_sys/kern_mem_sys.h"
 #include "gpu/mem_mgr/mem_mgr.h"
 #include "gpu/mem_mgr/heap.h"
+#include "containers/eheap_old.h"
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "nvdevid.h"
+#include "nvmisc.h"
 
 #define __VGPU_ALIAS_PGPU_LIST__
 #include "g_vgpu_resman_specific.h" // _get_chip_id_for_alias_pgpu
@@ -156,6 +158,13 @@ kvgpumgrGetPgpuIndex(KernelVgpuMgr *pKernelVgpuMgr, NvU32 gpuPciId, NvU32* index
 
 NvBool
 kvgpumgrIsHeterogeneousVgpuSupported(void)
+{
+    /*This support is currently limited to VMware and KVM*/
+    return (osIsVgpuVfioPresent() == NV_OK);
+}
+
+NvBool
+kvgpumgrIsVgpuWarmUpdateSupported(void)
 {
     /*This support is currently limited to VMware and KVM*/
     return (osIsVgpuVfioPresent() == NV_OK);
@@ -824,7 +833,7 @@ kvgpumgrHeterogeneousGetChidOffset(NvU32 vgpuTypeId, NvU16 placementId,
     if ((status = kvgpumgrGetVgpuTypeInfo(vgpuTypeId, &pVgpuTypeInfo)) != NV_OK)
         return status;
 
-    if ((placementId == NVA081_PLACEMENT_ID_INVALID))
+    if (placementId == NVA081_PLACEMENT_ID_INVALID)
         return NV_ERR_INVALID_ARGUMENT;
 
     /* Channel count provided by plugin and calculated by RM should be same */
@@ -2496,12 +2505,12 @@ _kvgpumgrIsPlacementValid(OBJGPU *pGpu, KERNEL_PHYS_GPU_INFO *pPgpuInfo, NvU32 v
     if (IS_GSP_CLIENT(pGpu))
     {
         invalidPlacements = denyListAdaHopper;
-        length = sizeof(denyListAdaHopper) / sizeof(NvU32);
+        length = NV_ARRAY_ELEMENTS(denyListAdaHopper);
     }
     else
     {
         invalidPlacements = denyListAmpere;
-        length = sizeof(denyListAmpere) / sizeof(NvU32);
+        length = NV_ARRAY_ELEMENTS(denyListAmpere);
     }
 
     vgpuFbLength = pPgpuInfo->guestVmmuCount[vgpuTypeIndex] * gpuGetVmmuSegmentSize(pGpu);
@@ -2714,7 +2723,7 @@ _kvgpumgrSetHeterogeneousResources(OBJGPU *pGpu, KERNEL_PHYS_GPU_INFO *pPgpuInfo
      * at the start.
      */
     newVmmuSegMax = ((vmmuSegMin + vmmuSegMax) / 2);
-    if ((isCarveOutGspHeap == NV_TRUE))
+    if (isCarveOutGspHeap)
     {
         NV_ASSERT((gspHeapOffsetMin == 0));
 
@@ -2743,7 +2752,7 @@ _kvgpumgrSetHeterogeneousResources(OBJGPU *pGpu, KERNEL_PHYS_GPU_INFO *pPgpuInfo
      * at the end.
      */
     newVmmuSegMin = (vmmuSegMin + vmmuSegMax) / 2;
-    if ((isCarveOutGspHeap == NV_TRUE))
+    if (isCarveOutGspHeap)
     {
         newVmmuSegMax = vmmuSegMax - 1;
         newGspHeapOffsetMin = newVmmuSegMax * vmmuSegSize;
@@ -2788,8 +2797,9 @@ kvgpumgrSetSupportedPlacementIds(OBJGPU *pGpu)
 
     pPgpuInfo->heterogeneousTimesliceSizesSupported = NV_FALSE;
 
-    /* Initially, heterogeneous vgpus enabled only for sriov vGPUs on VMware/KVM */
-    if (gpuIsSriovEnabled(pGpu))
+    /* Heterogeneous vgpus enabled for SRIOV vGPUs on VMware/KVM */
+    if (gpuIsSriovEnabled(pGpu)
+        )
     {
         if (osIsVgpuVfioPresent() == NV_OK)
             pPgpuInfo->heterogeneousTimesliceSizesSupported = NV_TRUE;
@@ -2882,12 +2892,15 @@ kvgpumgrSetSupportedPlacementIds(OBJGPU *pGpu)
         {
             pPgpuInfo->placementRegionSize = pVgpuTypeInfo->placementSize;
 
-            if (pPgpuInfo->guestVmmuCount[i])
+            if (gpuIsSriovEnabled(pGpu))
             {
-                totalVmmuCount = pPgpuInfo->guestVmmuCount[i];
+                if (pPgpuInfo->guestVmmuCount[i])
+                {
+                    totalVmmuCount = pPgpuInfo->guestVmmuCount[i];
 
-                if (IS_GSP_CLIENT(pGpu))
-                    totalVmmuCount += (pVgpuTypeInfo->gspHeapSize / gpuGetVmmuSegmentSize(pGpu));
+                    if (IS_GSP_CLIENT(pGpu))
+                        totalVmmuCount += (pVgpuTypeInfo->gspHeapSize / gpuGetVmmuSegmentSize(pGpu));
+                }
             }
         }
     }
@@ -2895,8 +2908,6 @@ kvgpumgrSetSupportedPlacementIds(OBJGPU *pGpu)
     /*
      * For SRIOV, the placement IDs are aligned to 1/2, 1/4, 1/8, 1/16 partitions
      * due to restrictions on channels assigned to VF being in power-of-2.
-     * TODO : Define placement IDs for legacy vGPUs which do not have
-     * power-of-2 channel restriction
      */
     if (gpuIsSriovEnabled(pGpu))
     {
@@ -3107,24 +3118,30 @@ kvgpumgrUpdateHeterogeneousInfo(OBJGPU *pGpu, NvU32 vgpuTypeId, NvU16 *placement
                     if (pPgpuInfo->creatablePlacementIds[i][j] != NVA081_PLACEMENT_ID_INVALID)
                     {
                         *placementId = pPgpuInfo->creatablePlacementIds[i][j];
-                        *guestFbOffset = pPgpuInfo->supportedVmmuOffsets[i][j] *
-                                         gpuGetVmmuSegmentSize(pGpu);
-                        *guestFbLength = pPgpuInfo->guestVmmuCount[i] *
-                                         gpuGetVmmuSegmentSize(pGpu);
-                        *gspHeapOffset = pPgpuInfo->gspHeapOffsets[i][j];
-                         bIdFound = NV_TRUE;
-                         break;
+                        if (gpuIsSriovEnabled(pGpu))
+                        {
+                            *guestFbOffset = pPgpuInfo->supportedVmmuOffsets[i][j] *
+                                             gpuGetVmmuSegmentSize(pGpu);
+                            *guestFbLength = pPgpuInfo->guestVmmuCount[i] *
+                                             gpuGetVmmuSegmentSize(pGpu);
+                            *gspHeapOffset = pPgpuInfo->gspHeapOffsets[i][j];
+                        }
+                        bIdFound = NV_TRUE;
+                        break;
                     }
                 }
                 else
                 {
                     if (pPgpuInfo->creatablePlacementIds[i][j] == *placementId)
                     {
-                        *guestFbOffset = pPgpuInfo->supportedVmmuOffsets[i][j] *
-                                         gpuGetVmmuSegmentSize(pGpu);
-                        *guestFbLength = pPgpuInfo->guestVmmuCount[i] *
-                                         gpuGetVmmuSegmentSize(pGpu);
-                        *gspHeapOffset = pPgpuInfo->gspHeapOffsets[i][j];
+                        if (gpuIsSriovEnabled(pGpu))
+                        {
+                            *guestFbOffset = pPgpuInfo->supportedVmmuOffsets[i][j] *
+                                             gpuGetVmmuSegmentSize(pGpu);
+                            *guestFbLength = pPgpuInfo->guestVmmuCount[i] *
+                                             gpuGetVmmuSegmentSize(pGpu);
+                            *gspHeapOffset = pPgpuInfo->gspHeapOffsets[i][j];
+                        }
                         bIdFound = NV_TRUE;
                         break;
                     }

@@ -31,6 +31,7 @@ NVIDIA_SOURCES += nvidia/nv-rsync.c
 NVIDIA_SOURCES += nvidia/nv-msi.c
 NVIDIA_SOURCES += nvidia/nv-caps.c
 NVIDIA_SOURCES += nvidia/nv-caps-imex.c
+NVIDIA_SOURCES += nvidia/nv-host1x.c
 NVIDIA_SOURCES += nvidia/nv_uvm_interface.c
 NVIDIA_SOURCES += nvidia/libspdm_aead.c
 NVIDIA_SOURCES += nvidia/libspdm_ecc.c

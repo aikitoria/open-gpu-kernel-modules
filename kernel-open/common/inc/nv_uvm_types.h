@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2014-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2014-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -39,12 +39,13 @@
 // are multiple BIG page sizes in RM. These defines are used as flags to "0"
 // should be OK when user is not sure which pagesize allocation it wants
 //
-#define UVM_PAGE_SIZE_DEFAULT    0x0
-#define UVM_PAGE_SIZE_4K         0x1000
-#define UVM_PAGE_SIZE_64K        0x10000
-#define UVM_PAGE_SIZE_128K       0x20000
-#define UVM_PAGE_SIZE_2M         0x200000
-#define UVM_PAGE_SIZE_512M       0x20000000
+#define UVM_PAGE_SIZE_DEFAULT    0x0ULL
+#define UVM_PAGE_SIZE_4K         0x1000ULL
+#define UVM_PAGE_SIZE_64K        0x10000ULL
+#define UVM_PAGE_SIZE_128K       0x20000ULL
+#define UVM_PAGE_SIZE_2M         0x200000ULL
+#define UVM_PAGE_SIZE_512M       0x20000000ULL
+#define UVM_PAGE_SIZE_256G       0x4000000000ULL
 
 //
 // When modifying flags, make sure they are compatible with the mirrored
@@ -395,6 +396,7 @@ typedef enum
     UVM_LINK_TYPE_NVLINK_2,
     UVM_LINK_TYPE_NVLINK_3,
     UVM_LINK_TYPE_NVLINK_4,
+    UVM_LINK_TYPE_NVLINK_5,
     UVM_LINK_TYPE_C2C,
 } UVM_LINK_TYPE;
 
@@ -566,11 +568,6 @@ typedef struct UvmGpuP2PCapsParams_tag
     // second, not taking into account the protocols overhead. The reported
     // bandwidth for indirect peers is zero.
     NvU32 totalLinkLineRateMBps;
-
-    // Out: True if the peers have a indirect link to communicate. On P9
-    // systems, this is true if peers are connected to different NPUs that
-    // forward the requests between them.
-    NvU32 indirectAccess      : 1;
 } UvmGpuP2PCapsParams;
 
 // Platform-wide information
@@ -709,6 +706,13 @@ typedef struct UvmGpuInfo_tag
 
     // EGM base address to offset in the GMMU PTE entry for EGM mappings
     NvU64    egmBaseAddr;
+
+    // If connectedToSwitch is NV_TRUE,
+    // nvswitchEgmMemoryWindowStart tells the base address for the GPU's EGM memory in the
+    // NVSwitch address space. It is used when creating PTEs of GPU memory mappings
+    // to NVSwitch peers.
+    NvU64 nvswitchEgmMemoryWindowStart;
+
 } UvmGpuInfo;
 
 typedef struct UvmGpuFbInfo_tag

@@ -81,6 +81,7 @@ typedef struct
 #define NVLINK_INBAND_GPU_PROBE_CAPS_SRIOV_ENABLED NVBIT(0)
 #define NVLINK_INBAND_GPU_PROBE_CAPS_PROBE_UPDATE  NVBIT(1)
 #define NVLINK_INBAND_GPU_PROBE_CAPS_EGM_SUPPORT   NVBIT(2)
+#define NVLINK_INBAND_GPU_PROBE_CAPS_ATS_SUPPORT   NVBIT(3)
 
 /* Add more caps as need in the future */
 
@@ -116,6 +117,7 @@ typedef struct
 #define NVLINK_INBAND_FM_CAPS_BW_MODE_3QUARTER   NVBIT64(4)
 #define NVLINK_INBAND_FM_CAPS_MC_TEAM_SETUP_V2   NVBIT64(5)
 #define NVLINK_INBAND_FM_CAPS_EGM_ENABLED        NVBIT64(6)
+#define NVLINK_INBAND_FM_CAPS_ATS_ENABLED        NVBIT64(7)
 
 #define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW 1:0
 #define NVLINK_INBAND_FABRIC_HEALTH_MASK_DEGRADED_BW_NOT_SUPPORTED 0
@@ -206,7 +208,6 @@ typedef struct
 typedef struct
 {
     NvU64 mcTeamHandle;          /* Unique handle assigned for this Multicast team */
-                                 /* Should be zero if the response is sent to the importer nodes */
     NvU32 flags;                 /* For future use. Must be initialized to zero */
     NvU8  reserved[8];           /* For future use. Must be initialized to zero */
     NvU64 mcAddressBase;         /* FLA starting address assigned for the Multicast slot */

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2002-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2002-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -26,7 +26,7 @@
  * @brief   This file contains platform-independent code for the 1 Hz OS timer.
  */
 
-#include "objtmr.h"
+#include "gpu/timer/objtmr.h"
 #include "core/thread_state.h"
 #include "core/locks.h"
 
@@ -85,7 +85,6 @@ osDestroy1HzCallbacks
 {
     if (pTmr->pOs1HzEvent != NULL)
     {
-        tmrEventCancel(pTmr, pTmr->pOs1HzEvent);
         tmrEventDestroy(pTmr, pTmr->pOs1HzEvent);
         pTmr->pOs1HzEvent = NULL;
     }
@@ -354,7 +353,7 @@ exit:
         // UNLOCK: release GPU lock
         rmGpuGroupLockRelease(lockedGpus, GPUS_LOCK_FLAGS_NONE);
     }
-    else if (gpuIsCCFeatureEnabled(pGpu)) // bug 4580313 - limit to CC only for r550
+    else
     {
         portAtomicSetU32(&pGpu->bCallbackQueued, NV_TRUE);
     }
@@ -369,9 +368,6 @@ exit:
 
 void osRunQueued1HzCallbacksUnderLock(OBJGPU *pGpu)
 {
-    if (!gpuIsCCFeatureEnabled(pGpu)) // bug 4580313 - limit to CC only for r550
-        return;
-
     //
     // In traditional SLI, we might occasionally get called with just the
     // *sub*device lock held. Since all callbacks were written with the

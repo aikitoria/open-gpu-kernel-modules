@@ -269,9 +269,9 @@ channelReadChannelMemdesc
     // Use BAR1 if CPU access is allowed, otherwise allocate and init shadow
     // buffer for DMA access
     //
-    NvU32 transferFlags = (TRANSFER_FLAGS_USE_BAR1     |
+    NvU32 transferFlags = (pChannel->bUseBar1 ? TRANSFER_FLAGS_USE_BAR1 : TRANSFER_FLAGS_NONE) |
                            TRANSFER_FLAGS_SHADOW_ALLOC |
-                           TRANSFER_FLAGS_SHADOW_INIT_MEM);
+                           TRANSFER_FLAGS_SHADOW_INIT_MEM;
 
     if (pChannel->pbCpuVA == NULL)
     {
@@ -471,9 +471,9 @@ channelFillGpFifo
     // Use BAR1 if CPU access is allowed, otherwise allocate and init shadow
     // buffer for DMA access
     //
-    NvU32 transferFlags = (TRANSFER_FLAGS_USE_BAR1     |
+    NvU32 transferFlags = (pChannel->bUseBar1 ? TRANSFER_FLAGS_USE_BAR1 : TRANSFER_FLAGS_NONE) |
                            TRANSFER_FLAGS_SHADOW_ALLOC |
-                           TRANSFER_FLAGS_SHADOW_INIT_MEM);
+                           TRANSFER_FLAGS_SHADOW_INIT_MEM;
 
     NV_ASSERT_OR_RETURN(putIndex < pChannel->channelNumGpFifioEntries, NV_ERR_INVALID_STATE);
 
@@ -529,7 +529,7 @@ channelFillGpFifo
     }
 
     osFlushCpuWriteCombineBuffer();
-    
+
     //
     // On some architectures, if doorbell is mapped via bar0, we need to send
     // an extra flush
