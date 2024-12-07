@@ -3850,7 +3850,8 @@ nvGpuOpsBuildExternalAllocPtes
     NvBool      isPeerSupported,
     NvBool      isBar1P2PSupported,
     NvU32       peerId,
-    gpuExternalMappingInfo *pGpuExternalMappingInfo
+    gpuExternalMappingInfo *pGpuExternalMappingInfo,
+    RmPhysAddr bar1BusAddr
 )
 {
     NV_STATUS               status              = NV_OK;
@@ -4051,7 +4052,11 @@ nvGpuOpsBuildExternalAllocPtes
         if (nvFieldIsValid32(&pPteFmt->fldAtomicDisable.desc))
             nvFieldSetBool(&pPteFmt->fldAtomicDisable, !atomic, pte.v8);
 
-        gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
+        if (aperture == GMMU_APERTURE_PEER) {
+            gmmuFieldSetAperture(&pPteFmt->fldAperture, GMMU_APERTURE_SYS_NONCOH, pte.v8);
+        } else {
+            gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
+        }
 
         if (!isCompressedKind)
         {
@@ -4062,7 +4067,11 @@ nvGpuOpsBuildExternalAllocPtes
         }
     }
 
-    if (aperture == GMMU_APERTURE_PEER)
+    if (aperture == GMMU_APERTURE_PEER) {
+        fabricBaseAddress = bar1BusAddr;
+    }
+
+    /*if (aperture == GMMU_APERTURE_PEER)
     {
         FlaMemory* pFlaMemory = dynamicCast(pMemory, FlaMemory);
         nvFieldSet32(&pPteFmt->fldPeerIndex, peerId, pte.v8);
@@ -4124,7 +4133,7 @@ nvGpuOpsBuildExternalAllocPtes
                 }
             }
         }
-    }
+    }*/
 
     //
     // Both memdescGetPhysAddr() and kgmmuEncodePhysAddr() have pretty high overhead.
@@ -4322,7 +4331,8 @@ nvGpuOpsBuildExternalAllocPhysAddrs
     NvBool      isPeerSupported,
     NvBool      isBar1P2PSupported,
     NvU32       peerId,
-    UvmGpuExternalPhysAddrInfo *pGpuExternalPhysAddrInfo
+    UvmGpuExternalPhysAddrInfo *pGpuExternalPhysAddrInfo,
+    RmPhysAddr bar1BusAddr
 )
 {
     NV_STATUS               status              = NV_OK;
@@ -4400,7 +4410,11 @@ nvGpuOpsBuildExternalAllocPhysAddrs
         return NV_ERR_BUFFER_TOO_SMALL;
 
 
-    if (aperture == GMMU_APERTURE_PEER)
+    if (aperture == GMMU_APERTURE_PEER) {
+        fabricBaseAddress = bar1BusAddr;
+    }
+
+    /*if (aperture == GMMU_APERTURE_PEER)
     {
         FlaMemory* pFlaMemory = dynamicCast(pMemory, FlaMemory);
 
@@ -4461,7 +4475,7 @@ nvGpuOpsBuildExternalAllocPhysAddrs
                 }
             }
         }
-    }
+    }*/
 
     //
     // Both memdescGetPhysAddr() and kgmmuEncodePhysAddr() have pretty high overhead.
@@ -4545,6 +4559,7 @@ NV_STATUS nvGpuOpsGetExternalAllocPtesOrPhysAddrs(struct gpuAddressSpace *vaSpac
     Memory *pMemory = NULL;
     PMEMORY_DESCRIPTOR pMemDesc = NULL;
     OBJGPU *pMappingGpu = NULL;
+    RmPhysAddr bar1BusAddr = 0;
     NvU32 peerId = 0;
     NvBool isSliSupported = NV_FALSE;
     NvBool isPeerSupported = NV_FALSE;
@@ -4698,6 +4713,8 @@ NV_STATUS nvGpuOpsGetExternalAllocPtesOrPhysAddrs(struct gpuAddressSpace *vaSpac
                                                        &peerId);
             if (status != NV_OK)
                 goto freeGpaMemdesc;
+
+            bar1BusAddr = gpumgrGetGpuPhysFbAddr(pAdjustedMemDesc->pGpu);
         }
 
         //
@@ -4786,14 +4803,15 @@ NV_STATUS nvGpuOpsGetExternalAllocPtesOrPhysAddrs(struct gpuAddressSpace *vaSpac
                                                 isPeerSupported,
                                                 isBar1P2PSupported,
                                                 peerId,
-                                                pGpuExternalMappingInfo);
+                                                pGpuExternalMappingInfo,
+                                                bar1BusAddr);
     }
 
     if (pGpuExternalPhysAddrInfo != NULL)
     {
         status = nvGpuOpsBuildExternalAllocPhysAddrs(pVAS, vaSpace->device->session, pMappingGpu, pAdjustedMemDesc,
                                                      pMemory, offset, size, isIndirectPeerSupported, isPeerSupported,
-                                                     isBar1P2PSupported, peerId, pGpuExternalPhysAddrInfo);
+                                                     isBar1P2PSupported, peerId, pGpuExternalPhysAddrInfo, bar1BusAddr);
     }
 
 freeGpaMemdesc:
@@ -10813,7 +10831,7 @@ NV_STATUS nvGpuOpsGetChannelResourcePtes(struct gpuAddressSpace *vaSpace,
 
     status = nvGpuOpsBuildExternalAllocPtes(pVAS, vaSpace->device->session, pMappingGpu, pMemDesc, NULL,
                                             offset, size, NV_FALSE, NV_FALSE,
-                                            NV_FALSE, 0, pGpuExternalMappingInfo);
+                                            NV_FALSE, 0, pGpuExternalMappingInfo, 0);
 
     _nvGpuOpsLocksRelease(&acquiredLocks);
     threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
