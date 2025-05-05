@@ -1744,7 +1744,8 @@ NvU64 uvm_parent_gpu_canonical_address(uvm_parent_gpu_t *parent_gpu, NvU64 addr)
 
 static bool uvm_parent_gpu_is_coherent(const uvm_parent_gpu_t *parent_gpu)
 {
-    return parent_gpu->system_bus.memory_window_end > parent_gpu->system_bus.memory_window_start;
+    return true;
+    // return parent_gpu->system_bus.memory_window_end > parent_gpu->system_bus.memory_window_start;
 }
 
 static bool uvm_parent_gpu_needs_pushbuffer_segments(uvm_parent_gpu_t *parent_gpu)
