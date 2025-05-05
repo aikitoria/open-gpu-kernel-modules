@@ -4005,8 +4005,13 @@ nvGpuOpsBuildExternalAllocPtes
         NvU32 ptePcfSw  = 0;
         NvU32 ptePcfHw  = 0;
 
-         nvFieldSetBool(&pPteFmt->fldValid, NV_TRUE, pte.v8);
-         gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
+        nvFieldSetBool(&pPteFmt->fldValid, NV_TRUE, pte.v8);
+        // gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
+        if (aperture == GMMU_APERTURE_PEER) {
+            gmmuFieldSetAperture(&pPteFmt->fldAperture, GMMU_APERTURE_SYS_COH, pte.v8);
+        } else {
+            gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
+        }
          nvFieldSet32(&pPteFmt->fldKind, kind, pte.v8);
 
          ptePcfSw |= vol         ? (1 << SW_MMU_PCF_UNCACHED_IDX) : 0;
