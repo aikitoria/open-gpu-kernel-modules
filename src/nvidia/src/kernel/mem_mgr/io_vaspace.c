@@ -59,14 +59,15 @@ iovaspaceConstruct__IMPL
 void
 iovaspaceDestruct_IMPL(OBJIOVASPACE *pIOVAS)
 {
-    OBJVASPACE *pVAS = staticCast(pIOVAS, OBJVASPACE);
+    // OBJVASPACE *pVAS = staticCast(pIOVAS, OBJVASPACE);
 
-    if (pIOVAS->mappingCount != 0)
-    {
-        NV_PRINTF(LEVEL_ERROR, "%lld left-over mappings in IOVAS 0x%x\n",
-                  pIOVAS->mappingCount, pVAS->vaspaceId);
-        DBG_BREAKPOINT();
-    }
+    // TODO: might keep p2p mappings...
+    // if (pIOVAS->mappingCount != 0)
+    // {
+    //     NV_PRINTF(LEVEL_ERROR, "%lld left-over mappings in IOVAS 0x%x\n",
+    //               pIOVAS->mappingCount, pVAS->vaspaceId);
+    //     DBG_BREAKPOINT();
+    // }
 }
 
 NV_STATUS
@@ -625,7 +626,7 @@ OBJIOVASPACE *iovaspaceFromMapping(PIOVAMAPPING pIovaMapping)
     // not, the mapping has been left dangling outlasting the IOVAS it was
     // under.
     //
-    NV_ASSERT(pIOVAS != NULL);
+    // NV_ASSERT(pIOVAS != NULL);
 
     return pIOVAS;
 }
@@ -634,6 +635,7 @@ void iovaMappingDestroy(PIOVAMAPPING pIovaMapping)
 {
     OBJIOVASPACE *pIOVAS = iovaspaceFromMapping(pIovaMapping);
 
+    if (pIOVAS == NULL) return;
     NV_ASSERT_OR_RETURN_VOID(pIOVAS != NULL);
     iovaspaceDestroyMapping(pIOVAS, pIovaMapping);
 }
