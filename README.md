@@ -23,4 +23,3 @@ See https://github.com/tinygrad/open-gpu-kernel-modules/tree/550.54.15-p2p for a
 2) Install https://www.nvidia.com/en-us/drivers/details/254126/
 3) Run `./install.sh` in this repo
 4) Reboot the server
-
