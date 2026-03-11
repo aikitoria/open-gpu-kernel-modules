@@ -956,6 +956,8 @@ NV_STATUS  NV_API_CALL  nv_free_pages            (nv_state_t *, NvU32, NvBool, N
 
 NV_STATUS  NV_API_CALL  nv_register_user_pages   (nv_state_t *, NvU64, NvU64 *, void *, void **, NvBool);
 void       NV_API_CALL  nv_unregister_user_pages (nv_state_t *, NvU64, void **, void **);
+NvU32      NV_API_CALL  nv_get_compound_order    (void *);
+NvU32      NV_API_CALL  nv_get_page_array_compound_order(void *);
 
 NV_STATUS NV_API_CALL   nv_register_peer_io_mem  (nv_state_t *, NvU64 *, NvU64, void **);
 void      NV_API_CALL   nv_unregister_peer_io_mem(nv_state_t *, void *);
