@@ -25,6 +25,7 @@
 
 #include "os-interface.h"
 #include "nv-linux.h"
+#include <linux/hugetlb.h>
 
 #if defined(NVCPU_FAMILY_X86) && defined(NV_FOLL_LONGTERM_PRESENT) && \
     (defined(NV_PIN_USER_PAGES_HAS_ARGS_VMAS) ||                      \
@@ -213,6 +214,94 @@ done:
     return rmStatus;
 }
 
+/*
+ * Hidden header prepended to every page array returned by os_lock_user_pages().
+ * Stores metadata that travels with the page array through opaque void* layers.
+ *
+ * Memory layout: [nv_page_array_header_t][struct page * array[num_entries]]
+ *
+ * The caller receives a pointer to the struct page * array (past the header).
+ * nv_register_user_pages() and os_unlock_user_pages() read the header at a
+ * negative offset to recover num_entries and compound_order.
+ */
+typedef struct {
+    NvU64 num_entries;
+    NvU64 compound_order;
+} nv_page_array_header_t;
+
+#define NV_PAGE_ARRAY_HEADER_SIZE sizeof(nv_page_array_header_t)
+
+static inline nv_page_array_header_t *nv_page_array_header(struct page **pages)
+{
+    return (nv_page_array_header_t *)((NvU8 *)pages - NV_PAGE_ARRAY_HEADER_SIZE);
+}
+
+static NV_STATUS nv_alloc_page_array(
+    NvU64 num_entries,
+    NvU32 compound_order,
+    struct page ***out_pages
+)
+{
+    NV_STATUS status;
+    NvU8 *raw;
+    nv_page_array_header_t *header;
+
+    status = os_alloc_mem((void **)&raw,
+            NV_PAGE_ARRAY_HEADER_SIZE + num_entries * sizeof(struct page *));
+    if (status != NV_OK)
+        return status;
+
+    header = (nv_page_array_header_t *)raw;
+    header->num_entries = num_entries;
+    header->compound_order = compound_order;
+
+    *out_pages = (struct page **)(raw + NV_PAGE_ARRAY_HEADER_SIZE);
+    return NV_OK;
+}
+
+static void nv_free_page_array(struct page **pages)
+{
+    os_free_mem((NvU8 *)pages - NV_PAGE_ARRAY_HEADER_SIZE);
+}
+
+static NvBool nv_hugetlb_fast_path_eligible(
+    struct vm_area_struct *vma,
+    unsigned long start,
+    NvU64 page_count,
+    unsigned long *hpage_size_out,
+    unsigned int *compound_order_out
+)
+{
+    NvU64 range_size;
+    unsigned long end;
+    unsigned long hpage_size;
+
+    if (!vma || !is_vm_hugetlb_page(vma) || page_count == 0)
+        return NV_FALSE;
+
+    /* page_count comes from the user-controlled alloc limit. */
+    if (page_count > ((NvU64)ULONG_MAX / PAGE_SIZE))
+        return NV_FALSE;
+
+    range_size = page_count * PAGE_SIZE;
+    if (start > ULONG_MAX - range_size)
+        return NV_FALSE;
+
+    end = start + range_size;
+    hpage_size = vma_kernel_pagesize(vma);
+
+    if ((start & (hpage_size - 1)) != 0 ||
+        (range_size & (hpage_size - 1)) != 0 ||
+        end > vma->vm_end)
+    {
+        return NV_FALSE;
+    }
+
+    *hpage_size_out = hpage_size;
+    *compound_order_out = ilog2(hpage_size / PAGE_SIZE);
+    return NV_TRUE;
+}
+
 NV_STATUS NV_API_CALL os_lock_user_pages(
     void   *address,
     NvU64   page_count,
@@ -223,8 +312,7 @@ NV_STATUS NV_API_CALL os_lock_user_pages(
     NV_STATUS rmStatus;
     struct mm_struct *mm = current->mm;
     struct page **user_pages;
-    NvU64 i;
-    NvU64 npages = page_count;
+    NvU64 i, j;
     NvU64 pinned = 0;
     unsigned int gup_flags = DRF_VAL(_LOCK_USER_PAGES, _FLAGS, _WRITE, flags) ? FOLL_WRITE : 0;
     long ret;
@@ -240,18 +328,76 @@ NV_STATUS NV_API_CALL os_lock_user_pages(
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    rmStatus = os_alloc_mem((void **)&user_pages,
-            (page_count * sizeof(*user_pages)));
+    nv_mmap_read_lock(mm);
+
+    /*
+     * Hugetlb fast path: detect hugetlb VMAs and pin one page per hugepage.
+     * Pinning any sub-page of a compound page pins the entire folio via its
+     * refcount, so we only need one pin per hugepage. This reduces the page
+     * array from millions of entries to tens of entries for large mappings.
+     *
+     * Pages must be faulted before this call (caller should first-touch the
+     * entire mapping). pin_user_pages can fault on demand but is slow for
+     * unfaulted 1GB hugepages (~37ms per fault).
+     */
+    {
+        unsigned long start = (unsigned long)address;
+        struct vm_area_struct *vma = vma_lookup(mm, start);
+        unsigned long hpage_size;
+        unsigned int order;
+
+        if (nv_hugetlb_fast_path_eligible(vma,
+                                          start,
+                                          page_count,
+                                          &hpage_size,
+                                          &order))
+        {
+            NvU64 num_hugepages = page_count >> order;
+
+            rmStatus = nv_alloc_page_array(num_hugepages, order, &user_pages);
+            if (rmStatus != NV_OK)
+            {
+                nv_mmap_read_unlock(mm);
+                nv_printf(NV_DBG_ERRORS,
+                        "NVRM: failed to allocate hugepage table!\n");
+                return rmStatus;
+            }
+
+            for (i = 0; i < num_hugepages; i++)
+            {
+                ret = NV_PIN_USER_PAGES(start + i * hpage_size,
+                                        1,
+                                        gup_flags,
+                                        &user_pages[i]);
+                if (ret != 1)
+                {
+                    for (j = 0; j < i; j++)
+                        NV_UNPIN_USER_PAGE(user_pages[j]);
+                    nv_free_page_array(user_pages);
+                    nv_mmap_read_unlock(mm);
+                    return NV_ERR_INVALID_ADDRESS;
+                }
+            }
+
+            nv_mmap_read_unlock(mm);
+
+            *page_array = user_pages;
+            return NV_OK;
+        }
+    }
+
+    /* Normal path: pin all pages at 4K granularity */
+    rmStatus = nv_alloc_page_array(page_count, 0, &user_pages);
     if (rmStatus != NV_OK)
     {
+        nv_mmap_read_unlock(mm);
         nv_printf(NV_DBG_ERRORS,
                 "NVRM: failed to allocate page table!\n");
         return rmStatus;
     }
 
-    nv_mmap_read_lock(mm);
     ret = NV_PIN_USER_PAGES((unsigned long)address,
-                            npages, gup_flags, user_pages);
+                            page_count, gup_flags, user_pages);
     if (ret > 0)
     {
         pinned = ret;
@@ -276,6 +422,8 @@ NV_STATUS NV_API_CALL os_lock_user_pages(
     else if ((ret == -ENOMEM) &&
              (page_count > NV_NUM_PIN_PAGES_PER_ITERATION))
     {
+        NvU64 npages;
+
         for (pinned = 0; pinned < page_count; pinned += ret)
         {
             npages = page_count - pinned;
@@ -299,7 +447,7 @@ NV_STATUS NV_API_CALL os_lock_user_pages(
     {
         for (i = 0; i < pinned; i++)
             NV_UNPIN_USER_PAGE(user_pages[i]);
-        os_free_mem(user_pages);
+        nv_free_page_array(user_pages);
         return NV_ERR_INVALID_ADDRESS;
     }
 
@@ -316,16 +464,19 @@ NV_STATUS NV_API_CALL os_unlock_user_pages(
 {
     NvBool write = FLD_TEST_DRF(_LOCK_USER_PAGES, _FLAGS, _WRITE, _YES, flags);
     struct page **user_pages = page_array;
-    NvU32 i;
+    nv_page_array_header_t *header = nv_page_array_header(user_pages);
+    NvU64 num_entries = header->num_entries;
+    NvU64 i;
 
-    for (i = 0; i < page_count; i++)
+    for (i = 0; i < num_entries; i++)
     {
         if (write)
             set_page_dirty_lock(user_pages[i]);
+
         NV_UNPIN_USER_PAGE(user_pages[i]);
     }
 
-    os_free_mem(user_pages);
+    nv_free_page_array(user_pages);
 
     return NV_OK;
 }

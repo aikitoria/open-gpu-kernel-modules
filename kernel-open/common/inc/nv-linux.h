@@ -923,6 +923,7 @@ typedef struct nv_alloc_s {
     unsigned int   cache_type;
     unsigned int   num_pages;
     unsigned int   order;
+    unsigned int   compound_order;      /* 0 = normal 4K pages, >0 = hugepage compound order */
     unsigned int   size;
     nvidia_pte_t  *page_table;          /* array of physical pages allocated */
     unsigned int   pid;
@@ -1054,6 +1055,7 @@ typedef struct nv_dma_map_s {
     NvBool contiguous;
     NvU32 cache_type;
     NvBool bReadOnlyDeviceMap;
+    NvU64 page_granularity;             /* PAGE_SIZE for normal, hugepage_size for compound pages */
     struct sg_table *import_sgt;
 
     union
