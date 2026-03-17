@@ -4030,13 +4030,13 @@ nvGpuOpsBuildExternalAllocPtes
         NvU32 ptePcfHw  = 0;
 
         nvFieldSetBool(&pPteFmt->fldValid, NV_TRUE, pte.v8);
-        // gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
-        if (aperture == GMMU_APERTURE_PEER) {
+        if ((aperture == GMMU_APERTURE_PEER) && isBar1P2PSupported)
+        {
             gmmuFieldSetAperture(&pPteFmt->fldAperture, GMMU_APERTURE_SYS_COH, pte.v8);
         } else {
             gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
         }
-         nvFieldSet32(&pPteFmt->fldKind, kind, pte.v8);
+        nvFieldSet32(&pPteFmt->fldKind, kind, pte.v8);
 
          ptePcfSw |= vol         ? (1 << SW_MMU_PCF_UNCACHED_IDX) : 0;
          ptePcfSw |= readOnly    ? (1 << SW_MMU_PCF_RO_IDX)       : 0;
@@ -4079,9 +4079,12 @@ nvGpuOpsBuildExternalAllocPtes
         if (nvFieldIsValid32(&pPteFmt->fldAtomicDisable.desc))
             nvFieldSetBool(&pPteFmt->fldAtomicDisable, !atomic, pte.v8);
 
-        if (aperture == GMMU_APERTURE_PEER) {
+        if ((aperture == GMMU_APERTURE_PEER) && isBar1P2PSupported)
+        {
             gmmuFieldSetAperture(&pPteFmt->fldAperture, GMMU_APERTURE_SYS_NONCOH, pte.v8);
-        } else {
+        }
+        else
+        {
             gmmuFieldSetAperture(&pPteFmt->fldAperture, aperture, pte.v8);
         }
 
@@ -4094,11 +4097,12 @@ nvGpuOpsBuildExternalAllocPtes
         }
     }
 
-    if (aperture == GMMU_APERTURE_PEER) {
+    if ((aperture == GMMU_APERTURE_PEER) && isBar1P2PSupported)
+    {
         fabricBaseAddress = bar1BusAddr;
     }
 
-    /*if (aperture == GMMU_APERTURE_PEER)
+    if ((aperture == GMMU_APERTURE_PEER) && !isBar1P2PSupported)
     {
         nvFieldSet32(&pPteFmt->fldPeerIndex, peerId, pte.v8);
 
@@ -4158,7 +4162,7 @@ nvGpuOpsBuildExternalAllocPtes
                 }
             }
         }
-    }*/
+    }
 
     //
     // Both memdescGetPhysAddr() and kgmmuEncodePhysAddr() have pretty high overhead.
@@ -4435,11 +4439,12 @@ nvGpuOpsBuildExternalAllocPhysAddrs
         return NV_ERR_BUFFER_TOO_SMALL;
 
 
-    if (aperture == GMMU_APERTURE_PEER) {
+    if ((aperture == GMMU_APERTURE_PEER) && isBar1P2PSupported)
+    {
         fabricBaseAddress = bar1BusAddr;
     }
 
-    /*if (aperture == GMMU_APERTURE_PEER)
+    if ((aperture == GMMU_APERTURE_PEER) && !isBar1P2PSupported)
     {
         //
         // Any fabric memory descriptors are pre-encoded with the fabric base address
@@ -4497,7 +4502,7 @@ nvGpuOpsBuildExternalAllocPhysAddrs
                 }
             }
         }
-    }*/
+    }
 
     //
     // Both memdescGetPhysAddr() and kgmmuEncodePhysAddr() have pretty high overhead.

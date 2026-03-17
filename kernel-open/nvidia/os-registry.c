@@ -306,6 +306,33 @@ NvBool nv_is_uuid_in_gpu_exclusion_list(const char *uuid)
     return NV_FALSE;
 }
 
+static void nv_apply_bar1_p2p_mode(nvidia_stack_t *sp)
+{
+    switch (NVreg_Bar1P2PMode)
+    {
+        case NV_BAR1_P2P_MODE_DISABLE:
+            break;
+
+        case NV_BAR1_P2P_MODE_ENABLE:
+            rm_write_registry_dword(sp, NULL, "ForceP2P", 0x11);
+            rm_write_registry_dword(sp, NULL, "RMForceP2PType", 0x0);
+            rm_write_registry_dword(sp, NULL, "RMPcieP2PType", 0x1);
+            break;
+
+        case NV_BAR1_P2P_MODE_PCIE:
+            rm_write_registry_dword(sp, NULL, "ForceP2P", 0x11);
+            rm_write_registry_dword(sp, NULL, "RMForceP2PType", 0x1);
+            rm_write_registry_dword(sp, NULL, "RMPcieP2PType", 0x1);
+            break;
+
+        default:
+            nv_printf(NV_DBG_WARNINGS,
+                      "NVRM: Invalid NVreg_Bar1P2PMode=%u, using disable mode\n",
+                      NVreg_Bar1P2PMode);
+            break;
+    }
+}
+
 NV_STATUS NV_API_CALL os_registry_init(void)
 {
     nv_parm_t *entry;
@@ -342,6 +369,12 @@ NV_STATUS NV_API_CALL os_registry_init(void)
             NVreg_EnableUserNUMAManagement = 0;
         }
     }
+
+    /*
+     * Apply module-level BAR1 P2P policy before RegistryDwords parsing so
+     * explicit RegistryDwords can override this policy if needed.
+     */
+    nv_apply_bar1_p2p_mode(sp);
 
     rm_parse_option_string(sp, NVreg_RegistryDwords);
 

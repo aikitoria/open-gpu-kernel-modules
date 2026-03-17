@@ -1610,6 +1610,7 @@ extern NvU32 NVreg_EnableUserNUMAManagement;
 extern NvU32 NVreg_RegisterPCIDriver;
 extern NvU32 NVreg_RegisterPlatformDeviceDriver;
 extern NvU32 NVreg_EnableResizableBar;
+extern NvU32 NVreg_Bar1P2PMode;
 extern NvU32 NVreg_TegraGpuPgMask;
 extern NvU32 NVreg_EnableNonblockingOpen;
 extern NvU32 NVreg_UseKernelSuspendNotifiers;
