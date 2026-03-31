@@ -3455,12 +3455,22 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     NvU64 i;
     struct page **user_pages;
     nv_linux_state_t *nvl;
+    NvU32 compound_order;
+    NvU64 effective_count;
 
     nv_printf(NV_DBG_MEMINFO, "NVRM: VM: nv_register_user_pages: 0x%" NvU64_fmtx"\n", page_count);
     user_pages = *priv_data;
     nvl = NV_GET_NVL_FROM_NV_STATE(nv);
 
-    at = nvos_create_alloc(nvl->dev, page_count);
+    /* Read compound_order from os_lock_user_pages() hidden header. */
+    compound_order = nv_get_page_array_compound_order(user_pages);
+
+    if (compound_order > 0)
+        effective_count = page_count >> compound_order;
+    else
+        effective_count = page_count;
+
+    at = nvos_create_alloc(nvl->dev, effective_count);
 
     if (at == NULL)
     {
@@ -3481,9 +3491,10 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     if (unencrypted)
         at->flags.unencrypted = NV_TRUE;
 
+    at->compound_order = compound_order;
     at->order = get_order(at->num_pages * PAGE_SIZE);
 
-    for (i = 0; i < page_count; i++)
+    for (i = 0; i < effective_count; i++)
     {
         /*
          * We only assign the physical address and not the DMA address, since
@@ -3506,6 +3517,29 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     NV_PRINT_AT(NV_DBG_MEMINFO, at);
 
     return NV_OK;
+}
+
+NvU32 NV_API_CALL nv_get_compound_order(
+    void *priv_data
+)
+{
+    nv_alloc_t *at = priv_data;
+    return at->compound_order;
+}
+
+/*
+ * Read compound_order from the hidden header prepended to a page array
+ * by os_lock_user_pages().
+ *
+ * Layout: [num_entries:NvU64][compound_order:NvU64][struct page * array...]
+ *                                                   ^ page_array points here
+ */
+NvU32 NV_API_CALL nv_get_page_array_compound_order(
+    void *page_array
+)
+{
+    NvU64 *header = (NvU64 *)((NvU8 *)page_array - 2 * sizeof(NvU64));
+    return (NvU32)header[1];
 }
 
 void NV_API_CALL nv_unregister_user_pages(
