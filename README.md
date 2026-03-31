@@ -1,4 +1,4 @@
-# NVIDIA driver 595.45.04 with P2P for 4090 and 5090
+# NVIDIA driver 595.58.03 with P2P for 4090 and 5090
 
 This allows using P2P on 4090 and 5090 GPUs with the 595.45.04 driver version.
 See https://github.com/tinygrad/open-gpu-kernel-modules (various branches) for more info.
@@ -17,7 +17,7 @@ Note that this is very dangerous if you run untrusted software or devices.
     1) Edit `/etc/default/grub`
     2) Add `amd_iommu=on iommu=pt` to `GRUB_CMDLINE_LINUX_DEFAULT`
     3) Run `sudo update-grub`
-2) Install https://www.nvidia.com/en-us/drivers/details/265309/
+2) Install https://www.nvidia.com/fr-fr/drivers/details/265902/
 3) Run `./install.sh` in this repo
 4) Reboot the server
 
