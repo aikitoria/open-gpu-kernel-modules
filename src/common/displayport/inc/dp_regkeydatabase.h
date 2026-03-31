@@ -118,6 +118,9 @@
 
 #define NV_DP_REGKEY_DISABLE_NATIVE_DISPLAYID2X_SUPPORT    "DISABLE_NATIVE_DISPLAYID2X_SUPPORT"
 #define NV_DP_REGKEY_FORCE_NLPIGNORE_DDS                   "DP_FORCE_NLPIGNORE_DDS"
+
+#define NV_DP_REGKEY_ENABLE_CLEAR_MSA_WHEN_NOT_USED          "DP_ENABLE_CLEAR_MSA_WHEN_NOT_USED"
+
 //
 // Data Base used to store all the regkey values.
 // The actual data base is declared statically in dp_evoadapter.cpp.
@@ -169,6 +172,7 @@ struct DP_REGKEY_DATABASE
     bool  bDisableNativeDisplayId2xSupport;
     bool  bUseMaxDSCCompressionMST;
     bool  bIgnoreUnplugUnlessRequested;
+    bool  bEnableClearMSAWhenNotUsed;
 };
 
 extern struct DP_REGKEY_DATABASE dpRegkeyDatabase;

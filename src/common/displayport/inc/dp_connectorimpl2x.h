@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -110,6 +110,7 @@ namespace DisplayPort
         bool    bStuffDummySymbolsFor128b132b;
         bool    bStuffDummySymbolsFor8b10b;
         bool    bDisableWatermarkCaching;
+        bool    bEnableClearMSAWhenNotUsed;
 
         // Do not enable downspread while link training.
         bool    bDisableDownspread;

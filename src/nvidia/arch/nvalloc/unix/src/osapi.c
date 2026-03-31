@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -1376,7 +1376,11 @@ RmDmabufVerifyMemHandle(
 
     pMemDesc = pSrcMemory->pMemDesc;
 
-    if (pGpuInstanceInfo != NULL)
+    //
+    // We skip the partitionable heap check when the source memory is in
+    // sysmem as there is no valid heap (pHeap will be NULL).
+    //
+    if (pGpuInstanceInfo != NULL && memdescGetAddressSpace(pMemDesc) != ADDR_SYSMEM)
     {
         KERNEL_MIG_GPU_INSTANCE *pKernelMIGGpuInstance;
         pKernelMIGGpuInstance = (KERNEL_MIG_GPU_INSTANCE *) pGpuInstanceInfo;

@@ -2921,7 +2921,7 @@ static NV_STATUS add_gpu(const NvProcessorUuid *gpu_uuid,
 #if UVM_IS_CONFIG_HMM()
     // HMM was disabled when first initialising the parent so we can't support
     // it now. Tell the caller to retry with it disabled.
-    else if (!parent_gpu->devmem && enable_hmm) {
+    else if (!parent_gpu->devmem && enable_hmm && uvm_hmm_is_enabled_system_wide()) {
         status = NV_ERR_BUSY_RETRY;
         goto error;
     }
@@ -3222,10 +3222,25 @@ uvm_gpu_phys_address_t uvm_gpu_peer_phys_address(uvm_gpu_t *owning_gpu, NvU64 ad
 uvm_gpu_address_t uvm_gpu_peer_copy_address(uvm_gpu_t *owning_gpu, NvU64 address, uvm_gpu_t *accessing_gpu)
 {
     uvm_gpu_identity_mapping_t *gpu_peer_mapping;
+    const bool mig_peers_use_phys = uvm_gpus_are_smc_peers(owning_gpu, accessing_gpu) &&
+        accessing_gpu->parent->ce_phys_vidmem_write_supported;
 
-    if (accessing_gpu->parent->peer_copy_mode == UVM_GPU_PEER_COPY_MODE_PHYSICAL)
+    // MIG peers do not create peer vidmem mappings like other peers. They do
+    // create their vidmem identity mappings to cover all possible physical
+    // addresses, even those of other MIG peers.
+    // Use vidmem this identity mapping if CEs need to use virtual addresses.
+    if (uvm_gpus_are_smc_peers(owning_gpu, accessing_gpu) && !mig_peers_use_phys) {
+        uvm_gpu_phys_address_t phys_address = uvm_gpu_peer_phys_address(owning_gpu, address, accessing_gpu);
+        return uvm_gpu_address_virtual_from_vidmem_phys(accessing_gpu, phys_address.address);
+    }
+
+    // Use physical addresses for MIGs peers if CE allows it. Irespective of
+    // the peer copy mode.
+    if (accessing_gpu->parent->peer_copy_mode == UVM_GPU_PEER_COPY_MODE_PHYSICAL || mig_peers_use_phys)
         return uvm_gpu_address_from_phys(uvm_gpu_peer_phys_address(owning_gpu, address, accessing_gpu));
 
+    // MIG peers do not create peer GPU mappings so it should never reach here.
+    UVM_ASSERT(!uvm_gpus_are_smc_peers(owning_gpu, accessing_gpu));
     UVM_ASSERT(accessing_gpu->parent->peer_copy_mode == UVM_GPU_PEER_COPY_MODE_VIRTUAL);
     gpu_peer_mapping = uvm_gpu_get_peer_mapping(accessing_gpu, owning_gpu->id);
 

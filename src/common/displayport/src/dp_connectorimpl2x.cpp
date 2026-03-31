@@ -114,6 +114,7 @@ void ConnectorImpl2x::applyDP2xRegkeyOverrides()
     this->maxLinkRateFromRegkey = dpRegkeyDatabase.applyMaxLinkRateOverrides;
     bSupportInternalUhbrOnFpga  = dpRegkeyDatabase.supportInternalUhbrOnFpga;
     this->bDisableWatermarkCaching = dpRegkeyDatabase.bDisableWatermarkCaching;
+    this->bEnableClearMSAWhenNotUsed = dpRegkeyDatabase.bEnableClearMSAWhenNotUsed;
     if (dpRegkeyDatabase.bIgnoreCableIdCaps)
     {
         hal->setIgnoreCableIdCaps(true);
@@ -934,6 +935,18 @@ bool ConnectorImpl2x::notifyAttachBegin(Group *target, const DpModesetParams &mo
         //
         main->setDpStereoMSAParameters(!enableInbandStereoSignaling, modesetParams.msaparams);
         main->setDpMSAParameters(!enableInbandStereoSignaling, modesetParams.msaparams);
+    }
+    else
+    {
+        // Clear MSA parameters for MST topology
+        if (this->bEnableClearMSAWhenNotUsed)
+        {
+            NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES_PARAMS msaParams = modesetParams.msaparams;
+            msaParams.bEnableMSA        = false;
+
+            main->setDpStereoMSAParameters(false, msaParams);
+            main->setDpMSAParameters(false, msaParams);
+        }
     }
 
     NV_DPTRACE_INFO(NOTIFY_ATTACH_BEGIN_STATUS, bLinkTrainingStatus);
