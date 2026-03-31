@@ -3021,13 +3021,9 @@ static bool uvm_pmm_gpu_check_orphan_pages(uvm_pmm_gpu_t *pmm)
     return ret;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
-static void devmem_folio_free(struct folio *folio) {
-    struct page *page = &folio->page;
-#else
+
 static void devmem_page_free(struct page *page)
 {
-#endif
     uvm_gpu_chunk_t *chunk = uvm_pmm_devmem_page_to_chunk(page);
     uvm_gpu_t *gpu = uvm_gpu_chunk_get_gpu(chunk);
 
@@ -3278,14 +3274,9 @@ static void device_p2p_page_free_wake(struct nv_kref *ref)
     wake_up(&p2p_mem->waitq);
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
-static void device_p2p_folio_free(struct folio *folio)
-{
-    struct page *page = &folio->page;
-#else
+
 static void device_p2p_page_free(struct page *page)
 {
-#endif
     uvm_device_p2p_mem_t *p2p_mem = page->zone_device_data;
 
     page->zone_device_data = NULL;
@@ -3299,17 +3290,11 @@ static void device_p2p_folio_free(struct folio *folio)
 #endif
 
 #if UVM_CDMM_PAGES_SUPPORTED()
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
-static void device_coherent_folio_free(struct folio *folio)
-{
-    device_p2p_folio_free(folio);
-}
-#else
+
 static void device_coherent_page_free(struct page *page)
 {
     device_p2p_page_free(page);
 }
-#endif
 
 static void device_coherent_folio_free(struct folio *folio)
 {
