@@ -1825,6 +1825,13 @@ NvU64 uvm_parent_gpu_canonical_address(uvm_parent_gpu_t *parent_gpu, NvU64 addr)
 
 static bool uvm_parent_gpu_is_coherent(const uvm_parent_gpu_t *parent_gpu)
 {
+    // Blackwell+ consumer GPUs (e.g. 5090) use BAR1 P2P via the SYS_COH
+    // aperture rewrite in nvGpuOpsBuildExternalAllocPtes. UVM's P2P
+    // registration path must take the coherent route to match, otherwise
+    // the ZONE_DEVICE peer DMA setup conflicts with BAR1-as-sysmem PTEs.
+    if (parent_gpu->rm_info.gpuArch >= NV2080_CTRL_MC_ARCH_INFO_ARCHITECTURE_GB100)
+        return true;
+
     return parent_gpu->system_bus.memory_window_end > parent_gpu->system_bus.memory_window_start;
 }
 
