@@ -4183,7 +4183,7 @@ nvGpuOpsBuildExternalAllocPtes
         }
     }
 
-    if (aperture == GMMU_APERTURE_PEER)
+    if ((aperture == GMMU_APERTURE_PEER) && !isBar1P2PSupported)
     {
         nvFieldSet32(&pPteFmt->fldPeerIndex, peerId, pte.v8);
 
@@ -4520,7 +4520,7 @@ nvGpuOpsBuildExternalAllocPhysAddrs
         return NV_ERR_BUFFER_TOO_SMALL;
 
 
-    if (aperture == GMMU_APERTURE_PEER)
+    if ((aperture == GMMU_APERTURE_PEER) && !isBar1P2PSupported)
     {
         //
         // Any fabric memory descriptors are pre-encoded with the fabric base address
