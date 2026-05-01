@@ -2229,3 +2229,4 @@ module_exit(nvkms_exit);
 
 MODULE_INFO(supported, "external");
 MODULE_VERSION(NV_VERSION_STRING);
+MODULE_DESCRIPTION("NVIDIA modeset kernel module");

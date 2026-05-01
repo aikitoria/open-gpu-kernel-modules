@@ -268,7 +268,7 @@ objClInitPcieChipset(OBJGPU *pGpu, OBJCL *pCl)
     {
         domain = gpuGetDomain(pGpu);
 
-        if (clStoreBusTopologyCache(pCl, domain, PCI_MAX_BUSES) != NV_OK)
+        if (clStoreBusTopologyCache(pGpu, pCl, domain, PCI_MAX_BUSES) != NV_OK)
         {
             return NV_ERR_GENERIC;
         }
@@ -1503,7 +1503,7 @@ clFindP2PBrdg_IMPL
     }
 
     // If the bus topology is not cached, do it here
-    if (clStoreBusTopologyCache(pCl, domain, secBus16) != NV_OK)
+    if (clStoreBusTopologyCache(pGpu, pCl, domain, secBus16) != NV_OK)
     {
         return NULL;
     }
@@ -2584,9 +2584,10 @@ clFreeBusTopologyCache_IMPL(OBJCL *pCl)
 NV_STATUS
 clStoreBusTopologyCache_IMPL
 (
-    OBJCL *pCl,
-    NvU32  domain,
-    NvU16  secBus
+    OBJGPU *pGpu,
+    OBJCL  *pCl,
+    NvU32   domain,
+    NvU16   secBus
 )
 {
     void *handle;
@@ -2595,6 +2596,12 @@ clStoreBusTopologyCache_IMPL
     NvS8  device = 0, func = 0;
     NvU16 pciSubBaseClass;
     PBUSTOPOLOGYINFO pBusTopologyInfo = NULL, pBusTopologyInfoLast = NULL;
+    NvBool bGpuArchIsZeroFb = NV_FALSE;
+
+    if ((pGpu != NULL) && (pGpu->pGpuArch != NULL))
+    {
+        bGpuArchIsZeroFb = pGpu->pGpuArch->bGpuArchIsZeroFb;
+    }
 
     if (pCl->pBusTopologyInfo)
     {
@@ -2684,9 +2691,11 @@ clStoreBusTopologyCache_IMPL
                 pBusTopologyInfo->busInfo.subdeviceID = osPciReadWord(handle, PCI_COMMON_SUBSYSTEM_ID);
                 pBusTopologyInfo->busInfo.revisionID  = osPciReadByte(handle, PCI_HEADER_TYPE0_REVISION_ID);
 
+                // Bug 5889487 - Allow 3D controller dGPU should be validated in rmCheckAioPreApprovedList
+                // The bGpuArchIsZeroFb is set only for iGPU.
                 if ((pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_P2P) ||
                     (pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_HOST) ||
-                    (pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_3DCTRL))
+                    (bGpuArchIsZeroFb && (pciSubBaseClass == PCI_COMMON_CLASS_SUBBASECLASS_3DCTRL)))
                 {
                     pBusTopologyInfo->secBus = (NvU8)osPciReadByte(handle, PCI_TYPE_1_SECONDARY_BUS_NUMBER);
                     pBusTopologyInfo->bVgaAdapter = NV_FALSE;

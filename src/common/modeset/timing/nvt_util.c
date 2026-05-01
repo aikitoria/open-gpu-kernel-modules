@@ -367,6 +367,13 @@ NvU32 NvTiming_IsTimingRelaxedEqual(const NVT_TIMING *pT1, const NVT_TIMING *pT2
 }
 
 CODE_SEGMENT(NONPAGE_DD_CODE)
+NvU32 NvTiming_IsTimingRelaxedEqualEx(const NVT_TIMING *pT1, const NVT_TIMING *pT2)
+{
+    NvU32 bIsTimingRelaxedEqual = NvTiming_IsTimingRelaxedEqual(pT1, pT2);
+    return (bIsTimingRelaxedEqual && (pT1->etc.rrx1k == pT2->etc.rrx1k));
+}
+
+CODE_SEGMENT(NONPAGE_DD_CODE)
 NvU32 RRx1kToPclk (const NVT_TIMING *pT)
 {
     return (NvU32)axb_div_c_64(pT->HTotal * (pT->VTotal + ((pT->interlaced != 0) ? (pT->VTotal + 1) : 0)),

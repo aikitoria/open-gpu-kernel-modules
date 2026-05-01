@@ -71,31 +71,6 @@ else
   CC ?= cc
   LD ?= ld
   OBJDUMP ?= objdump
-  AWK ?= awk
-  # Bake the following awk program in a string. The program is needed to add C++
-  # to the languages excluded from BTF generation.
-  #
-  # Also, unconditionally return success (0) from the awk program, rather than
-  # propagating pahole's return status (with 'exit system(pahole_cmd)'), to
-  # workaround an DW_TAG_rvalue_reference_type error in
-  # kernel/nvidia-modeset.ko.
-  #
-  # BEGIN {
-  #     pahole_cmd = "pahole"
-  #     for (i = 1; i < ARGC; i++) {
-  #         if (ARGV[i] ~ /--lang_exclude=/) {
-  #             pahole_cmd = pahole_cmd sprintf(" %s,c++", ARGV[i])
-  #         } else {
-  #             pahole_cmd = pahole_cmd sprintf(" %s", ARGV[i])
-  #         }
-  #     }
-  #     system(pahole_cmd)
-  # }
-  PAHOLE_AWK_PROGRAM = BEGIN { pahole_cmd = \"pahole\"; for (i = 1; i < ARGC; i++) { if (ARGV[i] ~ /--lang_exclude=/) { pahole_cmd = pahole_cmd sprintf(\" %s,c++\", ARGV[i]); } else { pahole_cmd = pahole_cmd sprintf(\" %s\", ARGV[i]); } } system(pahole_cmd); }
-  # If scripts/pahole-flags.sh is not present in the kernel tree, add PAHOLE and
-  # PAHOLE_AWK_PROGRAM assignments to PAHOLE_VARIABLES; otherwise assign the
-  # empty string to PAHOLE_VARIABLES.
-  PAHOLE_VARIABLES=$(if $(wildcard $(KERNEL_SOURCES)/scripts/pahole-flags.sh),,"PAHOLE=$(AWK) '$(PAHOLE_AWK_PROGRAM)'")
 
   ifndef ARCH
     ARCH := $(shell uname -m | sed -e 's/i.86/i386/' \
@@ -133,10 +108,12 @@ else
   KBUILD_PARAMS += INSTALL_MOD_DIR="$(INSTALL_MOD_DIR)"
   KBUILD_PARAMS += NV_SPECTRE_V2=$(SPECTRE_V2_RETPOLINE)
 
+  export ORIG_PAHOLE := $(PAHOLE)
+
   .PHONY: modules module clean clean_conftest modules_install
   modules clean modules_install:
 	@$(MAKE) "LD=$(LD)" "CC=$(CC)" "OBJDUMP=$(OBJDUMP)" \
-	  $(PAHOLE_VARIABLES) $(KBUILD_PARAMS) $@
+	  PAHOLE=$(CURDIR)/pahole.sh $(KBUILD_PARAMS) $@
 	@if [ "$@" = "modules" ]; then \
 	  for module in $(NV_KERNEL_MODULES); do \
 	    if [ -x split-object-file.sh ]; then \

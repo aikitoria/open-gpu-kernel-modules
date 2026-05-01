@@ -363,7 +363,8 @@ check_symbol_exists() {
         for KMOD in linuxkpi.ko linuxkpi_gplv2.ko drm.ko dmabuf.ko ; do
             for KMODPATH in $KMODPATHS; do
                 if [ -e "$KMODPATH/$KMOD" ] ; then
-                    if nm "$KMODPATH/$KMOD" | grep "$SYMBOL" >/dev/null 2>&1 ; then
+                    # Search if this symbol is a global text symbol in nm output
+                    if nm "$KMODPATH/$KMOD" | grep "T.*$SYMBOL" >/dev/null 2>&1 ; then
                         return 0
                     fi
                 fi

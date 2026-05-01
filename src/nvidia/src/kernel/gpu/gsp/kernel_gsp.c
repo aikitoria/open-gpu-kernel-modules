@@ -101,7 +101,6 @@
 
 #define RPC_HDR  ((rpc_message_header_v*)(pRpc->message_buffer))
 
-#define GSP_SLOWNESS 0
 
 struct MIG_CI_UPDATE_CALLBACK_PARAMS
 {
@@ -199,6 +198,8 @@ static void _kgspRpcGspForcedDriverShutdown(OBJGPU *);
 static void _kgspDumpRmState(OBJGPU *pGpu, KernelGsp *pKernelGsp);
 
 static NvU32 _kgspClassifyGspTimeout(OBJGPU *, KernelGsp *, OBJRPC *, NvU32, NvU32, NvBool, NvBool);
+
+static NvBool _kgspCheckGspFatalHwError(OBJGPU *pGpu, KernelGsp *pKernelGsp);
 
 static void _kgspInitGpuProperties(OBJGPU *);
 static NV_STATUS _kgspDumpEngineFunc(OBJGPU*, PRB_ENCODER*, NVD_STATE*, void*);
@@ -2237,10 +2238,10 @@ _kgspHeartbeatIsInitialized(KernelGsp *pKernelGsp)
            (pKernelGsp->libosHeartbeatTimeoutMs != 0);
 }
 
-static NV_STATUS
+static void
 _kgspHeartbeatInit(OBJGPU *pGpu, KernelGsp *pKernelGsp)
 {
-    NV_ASSERT_OR_RETURN(kgspIsHeartbeatSupported(pGpu), NV_ERR_NOT_SUPPORTED);
+    NV_ASSERT_OR_RETURN_VOID(kgspIsHeartbeatSupported(pGpu));
 
     NvU64 defaultTimeoutMs = pGpu->timeoutData.defaultus / 1000;
 
@@ -2263,8 +2264,14 @@ _kgspHeartbeatInit(OBJGPU *pGpu, KernelGsp *pKernelGsp)
     // Since GSP-RM requests the DMA, and GSP-RM should be confined to default timeout, also
     // set libos heartbeat timeout to 1.25 times the default timeout.
     pKernelGsp->libosHeartbeatTimeoutMs = defaultTimeoutMs + ((defaultTimeoutMs / 10) * 3);
+}
 
-    return NV_OK;
+static void
+_kgspHeartbeatDisable(OBJGPU *pGpu, KernelGsp *pKernelGsp)
+{
+    // Disable heartbeat checking for GSP-RM and Libos
+    pKernelGsp->gspRmHeartbeatTimeoutMs = 0;
+    pKernelGsp->libosHeartbeatTimeoutMs = 0;
 }
 
 static NvBool
@@ -2392,10 +2399,7 @@ _kgspLogRpcTimeout
                  pHistoryEntry->data[0],
                  pHistoryEntry->data[1]);
 
-    if (errorNum == GSP_SLOWNESS)
-    {
-        _kgspDumpRmState(pGpu, pKernelGsp);
-    }
+    _kgspDumpRmState(pGpu, pKernelGsp);
 
     _kgspLogGspTraceCrashBuffer(pGpu, pKernelGsp);
     kflcnCoreDumpNondestructive(pGpu, pKernelFlcn, 2);
@@ -2641,6 +2645,36 @@ _kgspIsTimeoutFatal(
 }
 
 /*!
+ * Check if there is any pending fatal HW error like GSP Poison Error that could have caused GSP to timeout
+ */
+static NvBool
+_kgspCheckGspFatalHwError
+(
+    OBJGPU     *pGpu,
+    KernelGsp  *pKernelGsp
+)
+{
+    NvU32         intrStatus;
+    KernelFalcon *pKernelFalcon = staticCast(pKernelGsp, KernelFalcon);
+
+    // Check if GSP has been poisoned. Mark device for reset if so.
+    intrStatus = kflcnGetPendingHostInterrupts(pGpu, pKernelFalcon);
+    if(kgspCheckGspPoisonError_HAL(pGpu, pKernelGsp, intrStatus))
+    {
+        //
+        // gpuCheckEccCounts_HAL should be able to detect and log Xid 140 (UNRECOVERABLE_ECC_ERROR_ESCAPE)
+        // but the functions it uses to get ecc error counts aren't wired to the right HAL for GB100+,
+        // bug 5816620 will fix it. Revisit this function and remove nvErrorLog_va once bug 5816620 is fixed.
+        //
+        nvErrorLog_va(pGpu, UNRECOVERABLE_ECC_ERROR_ESCAPE, "Poison error in GSP.");
+        gpuCheckEccCounts_HAL(pGpu);
+        gpuMarkDeviceForReset(pGpu);
+        return NV_TRUE;
+    }
+    return NV_FALSE;
+}
+
+/*!
  * GSP client RM RPC poll routine
  */
 static NV_STATUS
@@ -2810,6 +2844,12 @@ _kgspRpcRecvPoll
             rpcStatus = timeoutStatus;
 
             _kgspRpcIncrementTimeoutCountAndRateLimitPrints(pGpu, pRpc);
+
+            if(_kgspCheckGspFatalHwError(pGpu, pKernelGsp))
+            {
+				// We don't have to classify timeouts since we know for sure it is a fatal HW error.
+                goto done;
+            }
 
             isGspRmHeartbeatTimedOut = _kgspHeartbeatIsGspRmHeartbeatTimedOut(pGpu, pKernelGsp);
             isLibosHeartbeatTimedOut = _kgspHeartbeatIsLibosHeartbeatTimedOut(pGpu, pKernelGsp);
@@ -3908,7 +3948,7 @@ static void _kgspDumpRmState(OBJGPU *pGpu, KernelGsp *pKernelGsp)
     RMTIMEOUT timeout; 
     NV_STATUS status = NV_OK;
     NvU32 i = 0; 
-    NvU64 timeoutUs = pGpu->timeoutData.defaultus - pGpu->timeoutData.defaultus/2;
+    NvU64 timeoutUs = pGpu->timeoutData.defaultus / 10;
 
 
     gpuSetTimeout(pGpu, timeoutUs, &timeout, GPU_TIMEOUT_FLAGS_BYPASS_THREAD_STATE);
@@ -5015,12 +5055,6 @@ kgspInitRm_IMPL
         goto done;
     }
 
-    // GSP starts sending heartbeat after rminit, treat heartbeat values as valid at this point
-    if (kgspIsHeartbeatSupported(pGpu))
-    {
-        NV_ASSERT_OK_OR_GOTO(status, _kgspHeartbeatInit(pGpu, pKernelGsp), done);
-    }
-
     // at this point we should be able to exchange RPCs with RM offload task
     NV_RM_RPC_SET_GUEST_SYSTEM_INFO(pGpu, status);
     if (status != NV_OK)
@@ -5095,6 +5129,12 @@ kgspUnloadRm_IMPL
     NvBool bInPmTransition = (unloadMode != KGSP_UNLOAD_MODE_NORMAL);
     NvBool bGc6Entering = (unloadMode == KGSP_UNLOAD_MODE_GC6_ENTER);
 
+    if (pKernelGsp->bGspRmForceUnloaded)
+    {
+        NV_PRINTF(LEVEL_ERROR, "skipping attempt to unload GSP-RM after force unload\n");
+        return NV_OK;
+    }
+
     NV_PRINTF(LEVEL_INFO, "unloading GSP-RM\n");
     NV_RM_RPC_UNLOADING_GUEST_DRIVER(pGpu, rpcStatus, bInPmTransition, bGc6Entering, newPmLevel);
 
@@ -5106,6 +5146,9 @@ kgspUnloadRm_IMPL
 
     // Wait for GSP-RM processor to suspend
     kgspWaitForProcessorSuspend_HAL(pGpu, pKernelGsp);
+
+    // Disable heartbeat checking for GSP-RM and Libos
+    _kgspHeartbeatDisable(pGpu, pKernelGsp);
 
     // Dump GSP-RM logs and reset before proceeding with the rest of teardown
     kgspDumpGspLogs(pKernelGsp, (pKernelGsp->preserveLogs != NV_REG_STR_RM_GSP_PRESERVE_UNLOAD_LOGS_DISABLE));
@@ -6068,6 +6111,12 @@ kgspWaitForRmInitDone_IMPL
     NV_ASSERT_OK_OR_RETURN(RPC_HDR->rpc_result);
 
     pGpu->gspRmInitialized = NV_TRUE;
+
+    // GSP starts sending heartbeat after rminit, treat heartbeat values as valid at this point
+    if (kgspIsHeartbeatSupported(pGpu))
+    {
+       _kgspHeartbeatInit(pGpu, pKernelGsp);
+    }
 
     // Set D3Hot info let Kernel-RM reports it to KMD
     RPC_PARAMS(init_done, _v17_00);

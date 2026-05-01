@@ -55,6 +55,7 @@
 #define NV2080_CTRL_FIFO                          (0x11)
 #define NV2080_CTRL_GR                            (0x12)
 #define NV2080_CTRL_FB                            (0x13)
+#define NV2080_CTRL_NOISE                         (0x15)
 #define NV2080_CTRL_MC                            (0x17)
 #define NV2080_CTRL_BUS                           (0x18)
 #define NV2080_CTRL_PERF_LEGACY_PRIVILEGED        (0xe0) /* finn: Evaluated from "(NV2080_CTRL_PERF | NVxxxx_CTRL_LEGACY_PRIVILEGED)" */

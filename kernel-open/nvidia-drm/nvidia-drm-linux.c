@@ -64,3 +64,4 @@ module_exit(nv_linux_drm_exit);
 
 MODULE_INFO(supported, "external");
 MODULE_VERSION(NV_VERSION_STRING);
+MODULE_DESCRIPTION("NVIDIA DRM kernel module");

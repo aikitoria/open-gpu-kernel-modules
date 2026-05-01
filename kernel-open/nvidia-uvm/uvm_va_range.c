@@ -929,8 +929,12 @@ void uvm_va_range_remove_gpu_va_space(uvm_va_range_t *va_range,
                                                         gpu_va_space->gpu);
             break;
         case UVM_VA_RANGE_TYPE_DEVICE_P2P:
-            unmap_mapping_range(va_range->va_space->mapping, va_range->node.start, uvm_va_range_size(va_range), 1);
-            uvm_va_range_deinit_device_p2p(uvm_va_range_to_device_p2p(va_range), deferred_free_list);
+            // Device P2P ranges are associated with a specific GPU so destroy
+            // the range entirely if unregistering the associated GPU.
+            if (uvm_va_range_to_device_p2p(va_range)->gpu == gpu_va_space->gpu) {
+                unmap_mapping_range(va_range->va_space->mapping, va_range->node.start, uvm_va_range_size(va_range), 1);
+                uvm_va_range_deinit_device_p2p(uvm_va_range_to_device_p2p(va_range), deferred_free_list);
+            }
             break;
         default:
             UVM_ASSERT_MSG(0, "[0x%llx, 0x%llx] has type %d\n",
@@ -1172,9 +1176,10 @@ void uvm_va_range_unregister_gpu(uvm_va_range_t *va_range,
             va_range_unregister_gpu_semaphore_pool(uvm_va_range_to_semaphore_pool(va_range), gpu);
             break;
         case UVM_VA_RANGE_TYPE_DEVICE_P2P:
-            // All ranges should have been deinited by GPU VA space unregister,
-            // which should have already happened.
-            UVM_ASSERT(!uvm_va_range_to_device_p2p(va_range)->p2p_mem);
+            // All ranges for this GPU should have been deinited by GPU VA space
+            // unregister, which should have already happened.
+            if (uvm_va_range_to_device_p2p(va_range)->p2p_mem != NULL)
+                UVM_ASSERT(uvm_va_range_to_device_p2p(va_range)->gpu != gpu);
             break;
         default:
             UVM_ASSERT_MSG(0, "[0x%llx, 0x%llx] has type %d\n",

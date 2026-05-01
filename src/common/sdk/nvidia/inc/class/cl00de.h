@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -265,6 +265,8 @@ typedef struct RUSD_MEM_ROW_REMAP_INFO {
 
     NvU32 correctableRows;
     NvU32 uncorrectableRows;
+    NvU32 correctableRowsInactive;
+    NvU32 uncorrectableRowsInactive;
     NvBool isPending;
     NvBool hasFailureOccurred;
 } RUSD_MEM_ROW_REMAP_INFO;

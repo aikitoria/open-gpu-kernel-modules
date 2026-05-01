@@ -410,7 +410,20 @@ fabricvaspaceAllocNonContiguous_IMPL
     NV_ASSERT_OR_RETURN(NV_IS_ALIGNED64(align, pageSize), NV_ERR_INVALID_ARGUMENT);
     NV_ASSERT_OR_RETURN(NV_IS_ALIGNED64(size, pageSize),  NV_ERR_INVALID_ARGUMENT);
 
-    pageCount = (NvU32)(size / pageSize);
+    {
+        //
+        // Calculate page count and check for integer truncation.
+        // size / pageSize could exceed NvU32 max, causing undersized allocation.
+        //
+        NvU64 pageCount64 = size / pageSize;
+        if (pageCount64 > NV_U32_MAX)
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                      "Page count 0x%llx exceeds NvU32 max\n", pageCount64);
+            return NV_ERR_INVALID_ARGUMENT;
+        }
+        pageCount = (NvU32)pageCount64;
+    }
 
     // Check if heap can satisfy the request.
     NV_ASSERT_OK_OR_RETURN(fabricvaspaceGetFreeHeap(pFabricVAS, &freeSize));

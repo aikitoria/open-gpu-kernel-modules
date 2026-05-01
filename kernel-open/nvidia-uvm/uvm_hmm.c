@@ -1582,6 +1582,31 @@ uvm_va_block_region_t uvm_hmm_get_prefetch_region(uvm_va_block_t *va_block,
     return uvm_va_block_region_from_start_end(va_block, start, end);
 }
 
+uvm_prot_t uvm_hmm_compute_mapping_prot(uvm_va_block_t *va_block,
+                                        uvm_processor_id_t processor_id,
+                                        uvm_page_index_t page_index)
+{
+    if (!uvm_processor_mask_test(&va_block->mapped, UVM_ID_CPU))
+        return UVM_PROT_NONE;
+
+    if (uvm_page_mask_test(&va_block->cpu.pte_bits[UVM_PTE_BITS_CPU_WRITE], page_index)) {
+        if (uvm_processor_mask_test(&va_block->hmm.va_space->has_native_atomics[uvm_id_value(UVM_ID_CPU)],
+                                    processor_id))
+            // If the CPU has write access it also has atomic access, so it's
+            // fine for any GPU with HW support to do atomic accesses.
+            return UVM_PROT_READ_WRITE_ATOMIC;
+        else
+            // Otherwise the GPU needs to fault on atomic access to ensure the
+            // CPU is unmapped.
+            return UVM_PROT_READ_WRITE;
+    }
+
+    if (uvm_page_mask_test(&va_block->cpu.pte_bits[UVM_PTE_BITS_CPU_READ], page_index))
+        return UVM_PROT_READ_ONLY;
+
+    return UVM_PROT_NONE;
+}
+
 uvm_prot_t uvm_hmm_compute_logical_prot(uvm_va_block_t *va_block,
                                         struct vm_area_struct *vma,
                                         NvU64 addr)

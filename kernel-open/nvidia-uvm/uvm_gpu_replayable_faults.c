@@ -1800,6 +1800,7 @@ static NV_STATUS service_fault_batch_ats_sub(uvm_gpu_va_space_t *gpu_va_space,
         // ATS faults can't be unserviceable, since unserviceable faults require
         // GMMU PTEs.
         UVM_ASSERT(!current_entry->is_fatal);
+        UVM_ASSERT(current_entry->gpu == gpu);
 
         i++;
 
@@ -1849,6 +1850,7 @@ static NV_STATUS service_fault_batch_ats_sub(uvm_gpu_va_space_t *gpu_va_space,
 
     } while (current_entry &&
              (current_entry->fault_address < outer) &&
+             (previous_entry->gpu == current_entry->gpu) &&
              (previous_entry->va_space == current_entry->va_space));
 
     // Service the last sub-batch.

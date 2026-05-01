@@ -428,7 +428,7 @@ struct KernelGsp {
     struct KernelFalcon *__nvoc_pbase_KernelFalcon;    // kflcn super
     struct KernelGsp *__nvoc_pbase_KernelGsp;    // kgsp
 
-    // Vtable with 73 per-object function pointers
+    // Vtable with 74 per-object function pointers
     void (*__kgspConfigureFalcon__)(struct OBJGPU *, struct KernelGsp * /*this*/);  // halified (4 hals) body
     void (*__kgspFmcResetErrorCode__)(struct OBJGPU *, struct KernelGsp * /*this*/);  // halified (3 hals) body
     NvBool (*__kgspFmcCheckForErrorCode__)(struct OBJGPU *, struct KernelGsp * /*this*/);  // halified (3 hals) body
@@ -456,6 +456,7 @@ struct KernelGsp {
     void (*__kgspDumpMailbox__)(struct OBJGPU *, struct KernelGsp * /*this*/);  // halified (3 hals) body
     NvU32 (*__kgspReadMailbox__)(struct OBJGPU *, struct KernelGsp * /*this*/, NvU32);  // halified (3 hals) body
     NvU32 (*__kgspService__)(struct OBJGPU *, struct KernelGsp * /*this*/);  // halified (3 hals) body
+    NvBool (*__kgspCheckGspPoisonError__)(struct OBJGPU *, struct KernelGsp * /*this*/, NvU32);  // halified (3 hals) body
     void (*__kgspServiceFatalHwError__)(struct OBJGPU *, struct KernelGsp * /*this*/, NvU32);  // halified (3 hals) body
     void (*__kgspEccServiceEvent__)(struct OBJGPU *, struct KernelGsp * /*this*/);  // halified (3 hals) body
     void (*__kgspEccServiceUncorrError__)(struct OBJGPU *, struct KernelGsp * /*this*/);  // halified (3 hals) body
@@ -561,6 +562,7 @@ struct KernelGsp {
     NvBool bInLockdown;
     NvBool bPollingForRpcResponse;
     NvBool bFatalError;
+    NvBool bGspRmForceUnloaded;
     struct CrashCatReport *pWatchdogReport;
     MEMORY_DESCRIPTOR *pMemDesc_simAccessBuf;
     SimAccessBuffer *pSimAccessBuf;
@@ -964,6 +966,9 @@ static inline void kgspPrintGspBinBuildId(struct OBJGPU *pGpu, struct KernelGsp 
 #define kgspService_FNPTR(pKernelGsp) pKernelGsp->__kgspService__
 #define kgspService(pGpu, pKernelGsp) kgspService_DISPATCH(pGpu, pKernelGsp)
 #define kgspService_HAL(pGpu, pKernelGsp) kgspService_DISPATCH(pGpu, pKernelGsp)
+#define kgspCheckGspPoisonError_FNPTR(pKernelGsp) pKernelGsp->__kgspCheckGspPoisonError__
+#define kgspCheckGspPoisonError(pGpu, pKernelGsp, intrStatus) kgspCheckGspPoisonError_DISPATCH(pGpu, pKernelGsp, intrStatus)
+#define kgspCheckGspPoisonError_HAL(pGpu, pKernelGsp, intrStatus) kgspCheckGspPoisonError_DISPATCH(pGpu, pKernelGsp, intrStatus)
 #define kgspServiceFatalHwError_FNPTR(pKernelGsp) pKernelGsp->__kgspServiceFatalHwError__
 #define kgspServiceFatalHwError(pGpu, pKernelGsp, intrStatus) kgspServiceFatalHwError_DISPATCH(pGpu, pKernelGsp, intrStatus)
 #define kgspServiceFatalHwError_HAL(pGpu, pKernelGsp, intrStatus) kgspServiceFatalHwError_DISPATCH(pGpu, pKernelGsp, intrStatus)
@@ -1276,6 +1281,10 @@ static inline NvU32 kgspReadMailbox_DISPATCH(struct OBJGPU *pGpu, struct KernelG
 
 static inline NvU32 kgspService_DISPATCH(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp) {
     return pKernelGsp->__kgspService__(pGpu, pKernelGsp);
+}
+
+static inline NvBool kgspCheckGspPoisonError_DISPATCH(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, NvU32 intrStatus) {
+    return pKernelGsp->__kgspCheckGspPoisonError__(pGpu, pKernelGsp, intrStatus);
 }
 
 static inline void kgspServiceFatalHwError_DISPATCH(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, NvU32 intrStatus) {
@@ -1693,6 +1702,8 @@ NvU32 kgspReadMailbox_TU102(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, N
 
 NvU32 kgspService_TU102(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp);
 
+NvBool kgspCheckGspPoisonError_GB100(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, NvU32 intrStatus);
+
 void kgspServiceFatalHwError_GB100(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, NvU32 intrStatus);
 
 void kgspEccServiceEvent_GB100(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp);
@@ -1906,6 +1917,14 @@ static inline NvU32 kgspReadMailbox_474d46(struct OBJGPU *pGpu, struct KernelGsp
 
 static inline NvU32 kgspService_474d46(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp){
     NV_ASSERT_OR_RETURN_PRECOMP(0, 0);
+}
+
+static inline NvBool kgspCheckGspPoisonError_86b752(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, NvU32 intrStatus){
+    NV_ASSERT_OR_RETURN_PRECOMP(0, NV_FALSE);
+}
+
+static inline NvBool kgspCheckGspPoisonError_d69453(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, NvU32 intrStatus){
+    return NV_FALSE;
 }
 
 static inline void kgspServiceFatalHwError_f2d351(struct OBJGPU *pGpu, struct KernelGsp *pKernelGsp, NvU32 intrStatus){

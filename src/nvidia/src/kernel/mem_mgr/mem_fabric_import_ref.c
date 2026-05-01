@@ -203,6 +203,11 @@ memoryfabricimportedrefCtrlValidate_IMPL
         (pMemoryFabricImportedRef->numUpdatedPfns >= pParams->totalPfns))
         return NV_ERR_INVALID_ARGUMENT;
 
+    if (pParams->numPfns > NV_ARRAY_ELEMENTS(pParams->pfnArray))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
     if (!portSafeAddU64(pParams->offset, pParams->numPfns, &result) ||
         (result > pParams->totalPfns))
         return NV_ERR_OUT_OF_RANGE;

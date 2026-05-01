@@ -9021,7 +9021,10 @@ NV_STATUS nvGpuOpsSetPageDirectory(struct gpuAddressSpace *vaSpace,
     // RM clients must not unmap this address, and instead rely on RM to unmap
     // it when nvGpuOpsUnsetPageDirectory() is called.
     //
-    *dmaAddress = memdescGetPhysAddr(vaspaceGetPageDirBase(pVAS, pGpu), AT_GPU, 0);
+    if (status == NV_OK)
+    {
+        *dmaAddress = memdescGetPhysAddr(vaspaceGetPageDirBase(pVAS, pGpu), AT_GPU, 0);
+    }
 
     if (vaspaceIsExternallyOwned(pVAS))
     {

@@ -258,6 +258,14 @@ typedef struct
                                                       const uvm_va_policy_t *policy,
                                                       NvU64 address);
 
+    // Return the actual permissions allowed when mapping a page within a
+    // va_block on the given processor_id. This may differ from the logical
+    // permission if for example the kernel has the CPU pages mapped read-only
+    // to do copy-on-write.
+    uvm_prot_t uvm_hmm_compute_mapping_prot(uvm_va_block_t *va_block,
+                                            uvm_processor_id_t processor_id,
+                                            uvm_page_index_t page_index);
+
     // Return the logical protection allowed of a HMM va_block for the page at
     // the given address within the vma which must be valid. This is usually
     // obtained from uvm_hmm_va_block_find_create()).
@@ -559,6 +567,13 @@ typedef struct
                                                              NvU64 address)
     {
         return (uvm_va_block_region_t){};
+    }
+
+    static uvm_prot_t uvm_hmm_compute_mapping_prot(uvm_va_block_t *va_block,
+                                                   uvm_processor_id_t processor_id,
+                                                   uvm_page_index_t page_index)
+    {
+        return UVM_PROT_NONE;
     }
 
     static uvm_prot_t uvm_hmm_compute_logical_prot(uvm_va_block_t *va_block,

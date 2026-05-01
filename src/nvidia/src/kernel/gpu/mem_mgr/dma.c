@@ -650,39 +650,6 @@ deviceCtrlCmdDmaUnsetPageDirectory_IMPL
 }
 
 //
-// deviceCtrlCmdDmaSetPteInfo_IMPL
-//
-// Lock Requirements:
-//      Assert that API lock and GPUs lock held on entry
-//
-NV_STATUS
-deviceCtrlCmdDmaSetPteInfo_IMPL
-(
-    Device *pDevice,
-    NV0080_CTRL_DMA_SET_PTE_INFO_PARAMS *pParams
-)
-{
-    OBJGPU     *pGpu    = GPU_RES_GET_GPU(pDevice);
-    OBJVASPACE *pVAS    = NULL;
-    NV_STATUS   status  = NV_OK;
-
-    NV_ASSERT_OR_RETURN(rmapiLockIsOwner() && rmGpuLockIsOwner(), NV_ERR_INVALID_LOCK_STATE);
-
-    NV_CHECK_OK_OR_RETURN(LEVEL_WARNING,
-                          vaspaceGetByHandleOrDeviceDefault(RES_GET_CLIENT(pDevice), RES_GET_HANDLE(pDevice),
-                                                            pParams->hVASpace, &pVAS));
-
-    status = vaspaceSetPteInfo(pVAS, pGpu, pParams);
-    if (status != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "vaspaceGetPteInfo failed\n");
-        NV_ASSERT(0);
-    }
-
-    return status;
-}
-
-//
 // deviceCtrlCmdDmaFlush_IMPL
 //
 // Lock Requirements:

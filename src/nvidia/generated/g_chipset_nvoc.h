@@ -794,12 +794,12 @@ static inline NV_STATUS clPcieIsRelaxedOrderingSafe(struct OBJCL *pCl, struct OB
 #endif // __nvoc_chipset_h_disabled
 
 #ifdef __nvoc_chipset_h_disabled
-static inline NV_STATUS clStoreBusTopologyCache(struct OBJCL *pCl, NvU32 secDomain, NvU16 secBus) {
+static inline NV_STATUS clStoreBusTopologyCache(struct OBJGPU *pGpu, struct OBJCL *pCl, NvU32 secDomain, NvU16 secBus) {
     NV_ASSERT_FAILED_PRECOMP("OBJCL was disabled!");
     return NV_ERR_NOT_SUPPORTED;
 }
 #else // __nvoc_chipset_h_disabled
-#define clStoreBusTopologyCache(pCl, secDomain, secBus) clStoreBusTopologyCache_IMPL(pCl, secDomain, secBus)
+#define clStoreBusTopologyCache(pGpu, pCl, secDomain, secBus) clStoreBusTopologyCache_IMPL(pGpu, pCl, secDomain, secBus)
 #endif // __nvoc_chipset_h_disabled
 
 #ifdef __nvoc_chipset_h_disabled
@@ -979,7 +979,7 @@ static inline void clSyncWithGsp(struct OBJCL *arg_this, GspSystemInfo *arg2) {
 #define clSearchBR04_HAL(pCl, pBR04BusArray, pBR04RevArray, pBR04Count) clSearchBR04(pCl, pBR04BusArray, pBR04RevArray, pBR04Count)
 #define clPcieGetMaxCapableLinkWidth_HAL(pCl, pGpu, maxCapableLinkWidth) clPcieGetMaxCapableLinkWidth(pCl, pGpu, maxCapableLinkWidth)
 #define clPcieIsRelaxedOrderingSafe_HAL(pCl, pGpu, result) clPcieIsRelaxedOrderingSafe(pCl, pGpu, result)
-#define clStoreBusTopologyCache_HAL(pCl, secDomain, secBus) clStoreBusTopologyCache(pCl, secDomain, secBus)
+#define clStoreBusTopologyCache_HAL(pGpu, pCl, secDomain, secBus) clStoreBusTopologyCache(pGpu, pCl, secDomain, secBus)
 #define clFreeBusTopologyCache_HAL(pCl) clFreeBusTopologyCache(pCl)
 #define clIsL1SupportedForUpstreamPort_HAL(arg1, arg_this) clIsL1SupportedForUpstreamPort(arg1, arg_this)
 #define clIsL0sMaskEnabledForUpstreamPort_HAL(arg1, arg_this) clIsL0sMaskEnabledForUpstreamPort(arg1, arg_this)
@@ -1066,7 +1066,7 @@ NV_STATUS clPcieGetMaxCapableLinkWidth_IMPL(struct OBJCL *pCl, struct OBJGPU *pG
 
 NV_STATUS clPcieIsRelaxedOrderingSafe_IMPL(struct OBJCL *pCl, struct OBJGPU *pGpu, NvBool *result);
 
-NV_STATUS clStoreBusTopologyCache_IMPL(struct OBJCL *pCl, NvU32 secDomain, NvU16 secBus);
+NV_STATUS clStoreBusTopologyCache_IMPL(struct OBJGPU *pGpu, struct OBJCL *pCl, NvU32 secDomain, NvU16 secBus);
 
 void clFreeBusTopologyCache_IMPL(struct OBJCL *pCl);
 

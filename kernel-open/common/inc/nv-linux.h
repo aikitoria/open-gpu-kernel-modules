@@ -1728,7 +1728,69 @@ typedef enum
 #include <linux/reset.h>
 #include <linux/dma-buf.h>
 #include <linux/gpio.h>
+#if defined(NV_LINUX_OF_GPIO_H_PRESENT)
 #include <linux/of_gpio.h>
+#else
+#include <linux/gpio/driver.h>
+
+/*
+ * of_get_named_gpio() was removed along with linux/of_gpio.h by commit
+ * 51aaf65bbd21 ("gpio: of: Remove <linux/of_gpio.h>"). Provide a compat
+ * implementation using the remaining public GPIO APIs.
+ */
+static inline int of_get_named_gpio(const struct device_node *np,
+                                    const char *propname, int index)
+{
+    struct of_phandle_args gpiospec;
+    struct gpio_device *gdev;
+    struct gpio_desc *desc;
+    int ret;
+
+    if (!np)
+        return -ENOENT;
+
+    ret =
+        of_parse_phandle_with_args_map(np, propname, "gpio", index, &gpiospec);
+    if (ret)
+        return ret;
+
+    gdev = gpio_device_find_by_fwnode(of_fwnode_handle(gpiospec.np));
+    of_node_put(gpiospec.np);
+    if (!gdev)
+        return -EPROBE_DEFER;
+
+    /*
+     * Use the chip's of_xlate callback to translate the DT GPIO
+     * specifier into a linear offset.  Tegra GPIO controllers encode
+     * port and pin in args[0] and of_xlate sums per-port pin counts
+     * to produce the real offset.
+     */
+    {
+        struct gpio_chip *chip = gpio_device_get_chip(gdev);
+        int hwgpio;
+
+#if defined(CONFIG_OF_GPIO)
+        if (chip->of_xlate)
+            hwgpio = chip->of_xlate(chip, &gpiospec, NULL);
+        else
+#endif
+            hwgpio = gpiospec.args[0];
+
+        if (hwgpio < 0) {
+            gpio_device_put(gdev);
+            return hwgpio;
+        }
+
+        desc = gpio_device_get_desc(gdev, hwgpio);
+    }
+    gpio_device_put(gdev);
+
+    if (IS_ERR(desc))
+        return PTR_ERR(desc);
+
+    return desc_to_gpio(desc);
+}
+#endif
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 

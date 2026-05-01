@@ -104,6 +104,11 @@ NV_STATUS NV_API_CALL nv_add_mapping_context_to_file(
     if (*pfile_mapping_list == NULL)
     {
         *pfile_mapping_list = pNewNode;
+        if (NV_IS_CTL_DEVICE(nv))
+        {
+            nv_alloc_t *at = (nv_alloc_t *) nvamc->alloc;
+            atomic64_inc(&at->usage_count);
+        }
     }
     else
     {

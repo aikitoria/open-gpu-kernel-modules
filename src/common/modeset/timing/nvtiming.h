@@ -2110,6 +2110,13 @@ typedef struct tagNVT_EDID_18BYTE_DESCRIPTOR
 #define NVT_EDID_DISPLAY_DESCRIPTOR_CVT      0xF8   // CVT 3-byte timing code
 #define NVT_EDID_DISPLAY_DESCRIPTOR_ESTIII   0xF7   // establishied timing III
 #define NVT_EDID_DISPLAY_DESCRIPTOR_DUMMY    0x10   // dummy descriptor
+// NVT_EDID_DISPLAY_DESCRIPTOR_MANUF_SPECIFIC: Generic tag for E-EDID manufacturer-specific
+// display descriptors (0x00-0x0F per E-EDID spec). Used to preserve and pass through
+// proprietary panel/display data (e.g. Barco medical devices) in Long Display Descriptors
+// without interpretation. Customer: Barco medical devices. Bug reference: 5571067.
+#define NVT_EDID_DISPLAY_DESCRIPTOR_MANUF_SPECIFIC     0x0E   // generic tag for manufacturer-specific descriptors (range 0x00-0x0F)
+#define NVT_EDID_DISPLAY_DESCRIPTOR_MANUF_SPECIFIC_MIN 0x00   // manufacturer-specific descriptor range minimum
+#define NVT_EDID_DISPLAY_DESCRIPTOR_MANUF_SPECIFIC_MAX 0x0F   // manufacturer-specific descriptor range maximum
 
 //*******************
 // Raw EDID offsets and info
@@ -2187,6 +2194,7 @@ typedef struct tagNVT_EDID_18BYTE_DESCRIPTOR
 #define NVT_EDID_VER_1_2                     0x102
 #define NVT_EDID_VER_1_3                     0x103
 #define NVT_EDID_VER_1_4                     0x104
+#define NVT_EDID_MANUFACTURER_ID_CID         0x240D
 //
 // byte 0x14, Digital
 //    bits 0-3
@@ -5816,6 +5824,7 @@ NvU32 NvTiming_IsRoundedRREqual(NvU16 rr1, NvU32 rr1x1k, NvU16 rr2);
 NvU32 NvTiming_IsTimingExactEqual(const NVT_TIMING *pT1, const NVT_TIMING *pT2);
 NvU32 NvTiming_IsTimingExactEqualEx(const NVT_TIMING *pT1, const NVT_TIMING *pT2);
 NvU32 NvTiming_IsTimingRelaxedEqual(const NVT_TIMING *pT1, const NVT_TIMING *pT2);
+NvU32 NvTiming_IsTimingRelaxedEqualEx(const NVT_TIMING *pT1, const NVT_TIMING *pT2);
 NvU16 NvTiming_MaxFrameWidth(NvU16 HVisible, NvU16 rep);
 
 NvU32 NvTiming_GetVrrFmin(const NVT_EDID_INFO *pEdidInfo, const NVT_DISPLAYID_2_0_INFO *pDisplayIdInfo,

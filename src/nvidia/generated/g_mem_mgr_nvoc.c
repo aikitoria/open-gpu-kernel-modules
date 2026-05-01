@@ -992,7 +992,7 @@ static void __nvoc_init_funcTable_MemoryManager_1(MemoryManager *pThis, GpuHalsp
     // memmgrChooseKind -- halified (2 hals) body
     if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000a000UL) )) /* ChipHal: T234D | T264D */ 
     {
-        pThis->__memmgrChooseKind__ = &memmgrChooseKind_474d46;
+        pThis->__memmgrChooseKind__ = &memmgrChooseKind_f4fe90;
     }
     else
     {

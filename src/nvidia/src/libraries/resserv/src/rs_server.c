@@ -1699,6 +1699,7 @@ serverCopyResource
     status = clientGetResourceRef(pClientSrc, pParams->hResourceSrc, &pResourceRefSrc);
     if (status != NV_OK)
     {
+        NV_PRINTF(LEVEL_NOTICE, "Failed to find handle 0x%x under client 0x%x\n", pParams->hResourceSrc, pParams->hClientSrc);
         goto done;
     }
 
@@ -1711,7 +1712,8 @@ serverCopyResource
     status = clientGetResourceRef(pClientDst, pParams->hParentDst, &pParams->pDstParentRef);
     if (status != NV_OK)
     {
-        return status;
+        NV_PRINTF(LEVEL_NOTICE, "Failed to find handle 0x%x under client 0x%x\n", pParams->hParentDst, pParams->hClientDst);
+        goto done;
     }
 
     if (!resCanCopy(pResourceRefSrc->pResource))
@@ -1730,7 +1732,7 @@ serverCopyResource
 
     status = serverUpdateLockFlagsForCopy(pServer, pParams);
     if (status != NV_OK)
-        return status;
+        goto done;
 
     status = serverResLock_Prologue(pServer, LOCK_ACCESS_WRITE, pParams->pLockInfo, &releaseFlags, 0);
     if (status != NV_OK)

@@ -339,16 +339,6 @@ static inline NV_STATUS deviceCtrlCmdDmaGetPdeInfo(struct Device *pDevice, NV008
 #define deviceCtrlCmdDmaGetPdeInfo(pDevice, pParams) deviceCtrlCmdDmaGetPdeInfo_IMPL(pDevice, pParams)
 #endif // __nvoc_device_h_disabled
 
-NV_STATUS deviceCtrlCmdDmaSetPteInfo_IMPL(struct Device *pDevice, NV0080_CTRL_DMA_SET_PTE_INFO_PARAMS *pParams);
-#ifdef __nvoc_device_h_disabled
-static inline NV_STATUS deviceCtrlCmdDmaSetPteInfo(struct Device *pDevice, NV0080_CTRL_DMA_SET_PTE_INFO_PARAMS *pParams) {
-    NV_ASSERT_FAILED_PRECOMP("Device was disabled!");
-    return NV_ERR_NOT_SUPPORTED;
-}
-#else // __nvoc_device_h_disabled
-#define deviceCtrlCmdDmaSetPteInfo(pDevice, pParams) deviceCtrlCmdDmaSetPteInfo_IMPL(pDevice, pParams)
-#endif // __nvoc_device_h_disabled
-
 NV_STATUS deviceCtrlCmdDmaInvalidateTLB_IMPL(struct Device *pDevice, NV0080_CTRL_DMA_INVALIDATE_TLB_PARAMS *pParams);
 #ifdef __nvoc_device_h_disabled
 static inline NV_STATUS deviceCtrlCmdDmaInvalidateTLB(struct Device *pDevice, NV0080_CTRL_DMA_INVALIDATE_TLB_PARAMS *pParams) {
@@ -1017,8 +1007,6 @@ NV_STATUS deviceCtrlCmdDmaUnsetPageDirectory_IMPL(struct Device *pDevice, NV0080
 NV_STATUS deviceCtrlCmdDmaAdvSchedGetVaCaps_IMPL(struct Device *pDevice, NV0080_CTRL_DMA_ADV_SCHED_GET_VA_CAPS_PARAMS *pParams);
 
 NV_STATUS deviceCtrlCmdDmaGetPdeInfo_IMPL(struct Device *pDevice, NV0080_CTRL_DMA_GET_PDE_INFO_PARAMS *pParams);
-
-NV_STATUS deviceCtrlCmdDmaSetPteInfo_IMPL(struct Device *pDevice, NV0080_CTRL_DMA_SET_PTE_INFO_PARAMS *pParams);
 
 NV_STATUS deviceCtrlCmdDmaInvalidateTLB_IMPL(struct Device *pDevice, NV0080_CTRL_DMA_INVALIDATE_TLB_PARAMS *pParams);
 

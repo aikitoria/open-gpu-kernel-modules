@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -153,6 +153,59 @@ kgspGetGspRmBootUcodeStorage_GB100
 }
 
 /*!
+ * Check if GSP has been poisoned
+ *
+ * @param[in] pGpu         OBJGPU pointer
+ * @param[in] pKernelGsp   KernelGsp pointer
+ * @param[in] intrStatus   Interrupt status
+ *
+ * @return NV_TRUE if GSP has been poisoned, NV_FALSE otherwise
+ */
+NvBool
+kgspCheckGspPoisonError_GB100
+(
+ OBJGPU    *pGpu,
+ KernelGsp *pKernelGsp,
+ NvU32      intrStatus
+)
+{
+    NvU32 errorStatus = 0;
+
+    if (!FLD_TEST_DRF(_PGSP_FALCON, _IRQSTAT, _FATAL_ERROR, _TRUE, intrStatus))
+    {
+        return NV_FALSE;
+    }
+
+    KernelFalcon *pKernelFlcn     = staticCast(pKernelGsp, KernelFalcon);
+
+    if (kflcnGetFatalHwErrorStatus_HAL(pGpu, pKernelFlcn, &errorStatus) != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR unknown error pending\n");
+        MODS_ARCH_ERROR_PRINTF("NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR unknown error pending\n");
+
+        return NV_FALSE;
+    }
+
+    // Poison error
+    if (FLD_TEST_DRF(_PGSP, _RISCV_FAULT_CONTAINMENT_SRCSTAT, _GLOBAL_MEM, _FAULTED, errorStatus))
+    {
+
+        //
+        // Assert since this interrupt can't be cleared without a
+        // GPU reset and we shouldn't see this if poison is disabled
+        //
+        if (!gpuIsGlobalPoisonFuseEnabled(pGpu))
+        {
+            NV_ASSERT_FAILED("GSP poison pending when poison is disabled");
+        }
+
+        return NV_TRUE;
+    }
+
+    return NV_FALSE;
+}
+
+/*!
  * Handle GSP Fatal Errors
  */
 void
@@ -202,20 +255,11 @@ kgspServiceFatalHwError_GB100
 #endif // NV_PRINTF_STRINGS_ALLOWED
 
         // Poison error
-        if (FLD_TEST_DRF(_PGSP, _RISCV_FAULT_CONTAINMENT_SRCSTAT, _GLOBAL_MEM, _FAULTED, errorCode))
+        if (kgspCheckGspPoisonError_HAL(pGpu, pKernelGsp, intrStatus))
         {
             NV_ERROR_CONT_LOCATION loc = { 0 };
 
             loc.locType = NV_ERROR_CONT_LOCATION_TYPE_NONE;
-
-            //
-            // Assert since this interrupt can't be cleared without a
-            // GPU reset and we shouldn't see this if poison is disabled
-            //
-            if (!gpuIsGlobalPoisonFuseEnabled(pGpu))
-            {
-                NV_ASSERT_FAILED("GSP poison pending when poison is disabled");
-            }
 
             NV_ASSERT_OK(gpuUpdateErrorContainmentState_HAL(pGpu, NV_ERROR_CONT_ERR_ID_E24_GSP_POISON, loc, NULL));
         }
