@@ -35,6 +35,7 @@ address over DMA.
    - Add `amd_iommu=on iommu=pt` to `GRUB_CMDLINE_LINUX_DEFAULT` (use `intel_iommu=on iommu=pt` on Intel)
    - Run `sudo update-grub`
 2. Install the [NVIDIA 610.43.02 driver](https://www.nvidia.com/en-us/drivers/details/271414/)
+   - **When installing the driver, select the open source driver** so we can modify it with the patch.
 3. Run `./install.sh` in this repo
 4. Reboot the server
 
