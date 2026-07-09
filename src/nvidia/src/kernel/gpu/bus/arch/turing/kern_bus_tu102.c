@@ -385,8 +385,26 @@ kbusIsStaticBar1Supported_TU102
     //
     NvU64 fbSize            = pMemoryManager->Ram.fbAddrSpaceSizeMb << 20;
     NvU64 fbSizeAligned     = RM_ALIGN_UP(fbSize, RM_PAGE_SIZE_2M);
+    NvU64 clientFbSize      = memmgrGetClientFbAddrSpaceSize(pGpu, pMemoryManager);
+    NvU64 clientFbSizeAligned = RM_ALIGN_DOWN(clientFbSize, RM_PAGE_SIZE_2M);
     NvU64 bar1VASize        = pKernelBus->bar1[gfid].mappableLength;
     NvU64 bar1VASizeAligned = RM_ALIGN_DOWN(bar1VASize, RM_PAGE_SIZE_2M);
+    NvU64 staticBar1Offset  = NV_ALIGN_UP(consoleSize + mailboxSize, RM_PAGE_SIZE_512M);
+    NvBool bGb206Bar1P2PDefault =
+        ((gpuGetChipImpl(pGpu) == GPU_IMPLEMENTATION_GB206) &&
+         pKernelBus->getProperty(pKernelBus, PDB_PROP_KBUS_SUPPORT_BAR1_P2P_BY_DEFAULT));
+    NvU64 gb206MaxStaticMapSize =
+        (bar1VASizeAligned > staticBar1Offset) ?
+            RM_ALIGN_DOWN(bar1VASizeAligned - staticBar1Offset, RM_PAGE_SIZE_2M) : 0;
+    //
+    // GB206 enables BAR1 P2P by default. A display-attached GPU may already
+    // consume low BAR1 VA for console mappings, so allow the static mapping to
+    // cover the post-console BAR1 extent instead of requiring all client FB.
+    //
+    NvU64 autoStaticMapSize = bGb206Bar1P2PDefault ?
+        ((clientFbSizeAligned < gb206MaxStaticMapSize) ?
+            clientFbSizeAligned : gb206MaxStaticMapSize) :
+        fbSizeAligned;
 
     if (gfid != 0)
     {
@@ -427,14 +445,13 @@ kbusIsStaticBar1Supported_TU102
                 // really wants to enable static BAR1 regardless of the auto checks
                 //
                 NvU64 bar1MapSize =
-                    RM_ALIGN_DOWN(memmgrGetClientFbAddrSpaceSize(pGpu, pMemoryManager),
-                                  RM_PAGE_SIZE_2M);
+                    clientFbSizeAligned;
 
-                if (bar1VASizeAligned < bar1MapSize)
+                if (bar1VASizeAligned < (staticBar1Offset + bar1MapSize))
                 {
                     NV_PRINTF(LEVEL_ERROR, "BAR1 size %lld is not large enough to map FB size"
-                                           "%lld to force static BAR1\n",
-                                            bar1VASizeAligned, bar1MapSize);
+                                           "%lld at offset %lld to force static BAR1\n",
+                                            bar1VASizeAligned, bar1MapSize, staticBar1Offset);
                     DBG_BREAKPOINT();
 
                     return NV_ERR_INVALID_REGISTRY_KEY;
@@ -469,19 +486,17 @@ kbusIsStaticBar1Supported_TU102
                 //
                 NvU32 userdSize = 0;
                 NvU32 numChannels = kfifoGetMaxChannelsInSystem(pGpu, pKernelFifo);
-                NvU64 requiredAutoBar1Size = fbSizeAligned;
+                NvU64 requiredAutoBar1Size = autoStaticMapSize;
                 NvU64 mmioPrivSize = 16 * RM_PAGE_SIZE;
                 NvU64 doorbellSize = 16 * RM_PAGE_SIZE;
+                NvU64 alignmentPadding = staticBar1Offset - (consoleSize + mailboxSize);
+                NvU64 dynamicBar1Size;
 
                 kfifoGetUserdSizeAlign_HAL(pKernelFifo, &userdSize, NULL);
 
                 userdSize *= numChannels;
 
-                requiredAutoBar1Size += userdSize;
-                requiredAutoBar1Size += mmioPrivSize;
-                requiredAutoBar1Size += doorbellSize;
-                requiredAutoBar1Size += consoleSize;
-                requiredAutoBar1Size += mailboxSize;
+                dynamicBar1Size = userdSize + mmioPrivSize + doorbellSize;
 
                 //
                 // Console mappings are already mapped from the bottom of the BAR1 VASpace,
@@ -493,10 +508,30 @@ kbusIsStaticBar1Supported_TU102
                 //
                 if ((consoleSize != 0) || (mailboxSize != 0))
                 {
-                    requiredAutoBar1Size += RM_PAGE_SIZE_512M - ((consoleSize + mailboxSize) % RM_PAGE_SIZE_512M);
+                    if (bGb206Bar1P2PDefault)
+                    {
+                        requiredAutoBar1Size += staticBar1Offset;
+
+                        if (dynamicBar1Size > alignmentPadding)
+                        {
+                            requiredAutoBar1Size += dynamicBar1Size - alignmentPadding;
+                        }
+                    }
+                    else
+                    {
+                        requiredAutoBar1Size += dynamicBar1Size;
+                        requiredAutoBar1Size += consoleSize;
+                        requiredAutoBar1Size += mailboxSize;
+                        requiredAutoBar1Size += alignmentPadding;
+                    }
+                }
+                else
+                {
+                    requiredAutoBar1Size += dynamicBar1Size;
                 }
 
-                if (bar1VASizeAligned >= requiredAutoBar1Size)
+                if ((autoStaticMapSize != 0) &&
+                    (bar1VASizeAligned >= requiredAutoBar1Size))
                 {
                     NV_PRINTF(LEVEL_INFO, "Enabling static BAR1 automatically!\n");
                     return NV_OK;
@@ -535,8 +570,13 @@ kbusEnableStaticBar1Mapping_TU102
     MEMORY_DESCRIPTOR *pDmaMemDesc = NULL;
     NV_STATUS status = NV_OK;
     NvU64 bar1MapSize;
+    NvU64 clientFbSizeAligned;
+    NvU64 bar1VASizeAligned;
     NvU64 bar1BusAddr;
     NvU32 mapFlags = BUS_MAP_FB_FLAGS_MAP_UNICAST | BUS_MAP_FB_FLAGS_MAP_OFFSET_FIXED;
+    NvBool bGb206Bar1P2PDefault =
+        ((gpuGetChipImpl(pGpu) == GPU_IMPLEMENTATION_GB206) &&
+         pKernelBus->getProperty(pKernelBus, PDB_PROP_KBUS_SUPPORT_BAR1_P2P_BY_DEFAULT));
 
     //
     // But use memmgrGetClientFbAddrSpaceSize
@@ -548,8 +588,28 @@ kbusEnableStaticBar1Mapping_TU102
     // The last client FB addresses not aligned to 2MB will
     // not be mappable to a 2MB mapping.
     //
-    bar1MapSize = RM_ALIGN_DOWN(memmgrGetClientFbAddrSpaceSize(pGpu, pMemoryManager),
-                                RM_PAGE_SIZE_2M);
+    clientFbSizeAligned = RM_ALIGN_DOWN(memmgrGetClientFbAddrSpaceSize(pGpu, pMemoryManager),
+                                        RM_PAGE_SIZE_2M);
+    bar1VASizeAligned = RM_ALIGN_DOWN(pKernelBus->bar1[gfid].mappableLength,
+                                      RM_PAGE_SIZE_2M);
+    bar1MapSize = clientFbSizeAligned;
+
+    if (bGb206Bar1P2PDefault && (bar1Offset < bar1VASizeAligned))
+    {
+        //
+        // Mirror the eligibility logic above: for display-attached GB206, map
+        // only the BAR1 VA that remains after fixed console/mailbox mappings.
+        //
+        NvU64 maxStaticMapSize =
+            RM_ALIGN_DOWN(bar1VASizeAligned - bar1Offset, RM_PAGE_SIZE_2M);
+
+        if (bar1MapSize > maxStaticMapSize)
+        {
+            bar1MapSize = maxStaticMapSize;
+        }
+    }
+
+    NV_ASSERT_OR_RETURN(bar1MapSize != 0, NV_ERR_NOT_SUPPORTED);
 
     //
     // The static mapping is not backed by an allocated physical FB.
@@ -1043,7 +1103,6 @@ kbusGetStaticFbAperture_TU102
     NvBool         bDiscontigAllowed = !!(busMapFlags & BUS_MAP_FB_FLAGS_ALLOW_DISCONTIG);
     NvBool         bInStaticRegion   = NV_FALSE;
     NvBool         bInDynamicRegion  = NV_FALSE;
-    NvBool         bInLastPage       = NV_TRUE;
 
     NV_CHECK_OR_RETURN(LEVEL_SILENT, kbusIsStaticBar1Enabled(pGpu, pKernelBus),
                         NV_ERR_NOT_SUPPORTED);
@@ -1076,7 +1135,6 @@ kbusGetStaticFbAperture_TU102
         if (curLimit > staticBar1Size)
         {
             bInDynamicRegion = NV_TRUE;
-            bInLastPage = bInLastPage && ((curLimit - staticBar1Size) < RM_PAGE_SIZE_2M);
         }
         else
         {
@@ -1090,25 +1148,12 @@ kbusGetStaticFbAperture_TU102
     if (bInDynamicRegion && bInStaticRegion)
     {
         //
-        // With rounding down the static region to 2MB,
-        // we can allocate the last non-2MB aligned region
-        // but not have a mapping for it
+        // The static region may not cover all of client FB: it is rounded
+        // down to 2MB, and on display-attached GB206 it is clipped to the
+        // BAR1 VA left after the console/mailbox reservation. A range that
+        // spans the static/dynamic boundary falls back to a dynamic mapping.
         //
-        if (bInLastPage)
-        {
-            return NV_ERR_NOT_SUPPORTED;
-        }
-
-        NV_PRINTF(LEVEL_ERROR, "MemDesc spans both static and dynamic region,"
-                               "which is unsupported.\n");
-        NV_PRINTF(LEVEL_ERROR, "static Bar1 map [0, 0x%llx]\n",
-                  pKernelBus->bar1[gfid].staticBar1.size);
-        NV_PRINTF(LEVEL_ERROR, "Requested map range 0x%llx to 0x%llx, mapGranularity 0x%llx\n",
-                  mapRange.start, mrangeLimit(mapRange) - 1llu, mapRange.size);
-
-        memdescPrintMemdesc(pMemDesc, NV_TRUE, MAKE_NV_PRINTF_STR("Dumping memdesc:"));
-
-        return NV_ERR_INVALID_ARGUMENT;
+        return NV_ERR_NOT_SUPPORTED;
     }
 
     if (bInDynamicRegion)
