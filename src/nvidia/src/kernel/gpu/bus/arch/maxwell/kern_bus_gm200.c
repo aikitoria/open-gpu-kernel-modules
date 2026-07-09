@@ -37,6 +37,59 @@
     ((PCIE_P2P_WRITE_MAILBOX_SIZE << DRF_SIZE(NV_P2P_WMBOX_ADDR_ADDR)) - \
      PCIE_P2P_WRITE_MAILBOX_SIZE)
 
+static NV_STATUS
+_kbusSetupMailboxes_GM200
+(
+    OBJGPU    *pGpu0,
+    KernelBus *pKernelBus0,
+    OBJGPU    *pGpu1,
+    KernelBus *pKernelBus1,
+    NvU32      local2Remote,
+    NvU32      remote2Local,
+    NvBool    *pbLocalMailboxTeardownAttempted,
+    NvBool    *pbRemoteMailboxTeardownAttempted
+);
+
+static NV_STATUS
+_kbusProgramPciePeerMask_GM200
+(
+    OBJGPU *pGpu,
+    NvU32   peerMask
+)
+{
+    RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    NV2080_CTRL_INTERNAL_HSHUB_PEER_CONN_CONFIG_PARAMS params = {0};
+
+    params.programPciePeerMask = peerMask;
+
+    return pRmApi->Control(pRmApi,
+                           pGpu->hInternalClient,
+                           pGpu->hInternalSubdevice,
+                           NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
+                           &params,
+                           sizeof(params));
+}
+
+static NV_STATUS
+_kbusInvalidatePeerMask_GM200
+(
+    OBJGPU *pGpu,
+    NvU32   peerMask
+)
+{
+    RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+    NV2080_CTRL_INTERNAL_HSHUB_PEER_CONN_CONFIG_PARAMS params = {0};
+
+    params.invalidatePeerMask = peerMask;
+
+    return pRmApi->Control(pRmApi,
+                           pGpu->hInternalClient,
+                           pGpu->hInternalSubdevice,
+                           NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
+                           &params,
+                           sizeof(params));
+}
+
 /*!
  * @brief Setup the mailboxes of 2 GPUs so that the local GPU can access remote GPU.
  *
@@ -60,6 +113,27 @@ kbusSetupMailboxes_GM200
     NvU32      remote2Local
 )
 {
+    NV_STATUS status = _kbusSetupMailboxes_GM200(pGpu0, pKernelBus0,
+                                                 pGpu1, pKernelBus1,
+                                                 local2Remote, remote2Local,
+                                                 NULL, NULL);
+
+    NV_ASSERT_OK(status);
+}
+
+static NV_STATUS
+_kbusSetupMailboxes_GM200
+(
+    OBJGPU    *pGpu0,
+    KernelBus *pKernelBus0,
+    OBJGPU    *pGpu1,
+    KernelBus *pKernelBus1,
+    NvU32      local2Remote,
+    NvU32      remote2Local,
+    NvBool    *pbLocalMailboxTeardownAttempted,
+    NvBool    *pbRemoteMailboxTeardownAttempted
+)
+{
     PMEMORY_DESCRIPTOR *ppMemDesc    = NULL;
     RmPhysAddr          localP2PDomainRemoteAddr;
     RmPhysAddr          remoteP2PDomainLocalAddr;
@@ -72,35 +146,65 @@ kbusSetupMailboxes_GM200
     NV2080_CTRL_CMD_INTERNAL_BUS_SETUP_P2P_MAILBOX_LOCAL_PARAMS  params0 = {0};
     NV2080_CTRL_CMD_INTERNAL_BUS_SETUP_P2P_MAILBOX_REMOTE_PARAMS params1 = {0};
     NV_STATUS status;
+    NvBool bRemoteWMBoxMapped = NV_FALSE;
+    NvBool bLocalP2PDomainMapped = NV_FALSE;
+    NvBool bRemoteP2PDomainMapped = NV_FALSE;
+    NvBool bLocalMailboxControl = NV_FALSE;
+    NvBool bRemoteMailboxControl = NV_FALSE;
+    NvBool bMailboxTagWritten = NV_FALSE;
 
-    NV_ASSERT_OR_RETURN_VOID(local2Remote < P2P_MAX_NUM_PEERS);
-    NV_ASSERT_OR_RETURN_VOID(remote2Local < P2P_MAX_NUM_PEERS);
+    if (pbLocalMailboxTeardownAttempted != NULL)
+    {
+        *pbLocalMailboxTeardownAttempted = NV_FALSE;
+    }
+    if (pbRemoteMailboxTeardownAttempted != NULL)
+    {
+        *pbRemoteMailboxTeardownAttempted = NV_FALSE;
+    }
+
+    NV_ASSERT_OR_RETURN(local2Remote < P2P_MAX_NUM_PEERS, NV_ERR_INVALID_ARGUMENT);
+    NV_ASSERT_OR_RETURN(remote2Local < P2P_MAX_NUM_PEERS, NV_ERR_INVALID_ARGUMENT);
 
     // Ensure we have the correct bidirectional peer mapping
-    NV_ASSERT_OR_RETURN_VOID(pKernelBus1->p2pPcie.busPeer[remote2Local].remotePeerId ==
-                          local2Remote);
-    NV_ASSERT_OR_RETURN_VOID(pKernelBus0->p2pPcie.busPeer[local2Remote].remotePeerId ==
-                          remote2Local);
+    NV_ASSERT_OR_RETURN(pKernelBus1->p2pPcie.busPeer[remote2Local].remotePeerId ==
+                        local2Remote, NV_ERR_INVALID_STATE);
+    NV_ASSERT_OR_RETURN(pKernelBus0->p2pPcie.busPeer[local2Remote].remotePeerId ==
+                        remote2Local, NV_ERR_INVALID_STATE);
 
     ppMemDesc = &pKernelBus0->p2pPcie.busPeer[local2Remote].pRemoteWMBoxMemDesc;
     remoteWMBoxLocalAddr = kbusSetupMailboxAccess_HAL(pGpu1, pKernelBus1,
                                                       pGpu0, remote2Local,
                                                       ppMemDesc);
-    NV_ASSERT_OR_RETURN_VOID(remoteWMBoxLocalAddr != ~0ULL);
+    if (remoteWMBoxLocalAddr == ~0ULL)
+    {
+        status = NV_ERR_INVALID_ADDRESS;
+        goto kbusSetupMailboxes_cleanup;
+    }
+    bRemoteWMBoxMapped = NV_TRUE;
 
     ppMemDesc = &pKernelBus1->p2pPcie.busPeer[remote2Local].pRemoteP2PDomMemDesc;
     localP2PDomainRemoteAddr = kbusSetupP2PDomainAccess_HAL(pGpu0,
                                                             pKernelBus0,
                                                             pGpu1,
                                                             ppMemDesc);
-    NV_ASSERT_OR_RETURN_VOID(localP2PDomainRemoteAddr != ~0ULL);
+    if (localP2PDomainRemoteAddr == ~0ULL)
+    {
+        status = NV_ERR_INVALID_ADDRESS;
+        goto kbusSetupMailboxes_cleanup;
+    }
+    bLocalP2PDomainMapped = NV_TRUE;
 
     ppMemDesc = &pKernelBus0->p2pPcie.busPeer[local2Remote].pRemoteP2PDomMemDesc;
     remoteP2PDomainLocalAddr = kbusSetupP2PDomainAccess_HAL(pGpu1,
                                                             pKernelBus1,
                                                             pGpu0,
                                                             ppMemDesc);
-    NV_ASSERT_OR_RETURN_VOID(remoteP2PDomainLocalAddr != ~0ULL);
+    if (remoteP2PDomainLocalAddr == ~0ULL)
+    {
+        status = NV_ERR_INVALID_ADDRESS;
+        goto kbusSetupMailboxes_cleanup;
+    }
+    bRemoteP2PDomainMapped = NV_TRUE;
 
     // Setup the local GPU to access remote GPU's FB.
 
@@ -110,7 +214,11 @@ kbusSetupMailboxes_GM200
       PCIE_P2P_WRITE_MAILBOX_SIZE * remote2Local;
 
     // Write mailbox data window needs to be 64KB aligned.
-    NV_ASSERT((remoteWMBoxAddrU64 & 0xFFFF) == 0);
+    if ((remoteWMBoxAddrU64 & 0xFFFF) != 0)
+    {
+        status = NV_ERR_INVALID_ADDRESS;
+        goto kbusSetupMailboxes_cleanup;
+    }
 
     // Setup PCIE P2P Mailbox on local GPU
     params0.local2Remote                = local2Remote;
@@ -127,7 +235,11 @@ kbusSetupMailboxes_GM200
                               NV2080_CTRL_CMD_INTERNAL_BUS_SETUP_P2P_MAILBOX_LOCAL,
                               &params0,
                               sizeof(NV2080_CTRL_CMD_INTERNAL_BUS_SETUP_P2P_MAILBOX_LOCAL_PARAMS));
-    NV_ASSERT(status == NV_OK);
+    if (status != NV_OK)
+    {
+        goto kbusSetupMailboxes_cleanup;
+    }
+    bLocalMailboxControl = NV_TRUE;
 
     // Setup PCIE P2P Mailbox on remote GPU
     params1.local2Remote                = local2Remote;
@@ -143,9 +255,62 @@ kbusSetupMailboxes_GM200
                               NV2080_CTRL_CMD_INTERNAL_BUS_SETUP_P2P_MAILBOX_REMOTE,
                               &params1,
                               sizeof(NV2080_CTRL_CMD_INTERNAL_BUS_SETUP_P2P_MAILBOX_REMOTE_PARAMS));
-    NV_ASSERT(status == NV_OK);
+    if (status != NV_OK)
+    {
+        goto kbusSetupMailboxes_cleanup;
+    }
+    bRemoteMailboxControl = NV_TRUE;
 
     kbusWriteP2PWmbTag_HAL(pGpu1, pKernelBus1, remote2Local, params0.p2pWmbTag);
+    bMailboxTagWritten = NV_TRUE;
+
+    return NV_OK;
+
+kbusSetupMailboxes_cleanup:
+    NV_PRINTF(LEVEL_ERROR,
+              "P2P_MAILBOX_SETUP_FAIL localGpu=%u remoteGpu=%u localPeer=%u remotePeer=%u "
+              "status=0x%x wmboxMapped=%u localDomainMapped=%u remoteDomainMapped=%u "
+              "localCtrl=%u remoteCtrl=%u tagWritten=%u tag=0x%llx\n",
+              gpuGetInstance(pGpu0),
+              gpuGetInstance(pGpu1),
+              local2Remote,
+              remote2Local,
+              status,
+              bRemoteWMBoxMapped,
+              bLocalP2PDomainMapped,
+              bRemoteP2PDomainMapped,
+              bLocalMailboxControl,
+              bRemoteMailboxControl,
+              bMailboxTagWritten,
+              (NvU64)params0.p2pWmbTag);
+
+    if (bLocalMailboxControl)
+    {
+        kbusDestroyMailbox(pGpu0, pKernelBus0, pGpu1, local2Remote);
+        if (pbLocalMailboxTeardownAttempted != NULL)
+        {
+            *pbLocalMailboxTeardownAttempted = NV_TRUE;
+        }
+    }
+    else if (bRemoteWMBoxMapped || bRemoteP2PDomainMapped)
+    {
+        kbusDestroyPeerAccess_HAL(pGpu0, pKernelBus0, local2Remote);
+    }
+
+    if (bRemoteMailboxControl || bMailboxTagWritten)
+    {
+        kbusDestroyMailbox(pGpu1, pKernelBus1, pGpu0, remote2Local);
+        if (pbRemoteMailboxTeardownAttempted != NULL)
+        {
+            *pbRemoteMailboxTeardownAttempted = NV_TRUE;
+        }
+    }
+    else if (bLocalP2PDomainMapped)
+    {
+        kbusDestroyPeerAccess_HAL(pGpu1, pKernelBus1, remote2Local);
+    }
+
+    return status;
 }
 
 void
@@ -198,11 +363,28 @@ kbusSetupMailboxAccess_GM200
     PMEMORY_DESCRIPTOR *ppWMBoxMemDesc
 )
 {
-    return kbusSetupPeerBarAccess(pGpu0, pGpu1,
-                gpumgrGetGpuPhysFbAddr(pGpu0) +
-                    pKernelBus0->p2pPcie.writeMailboxBar1Addr +
-                    PCIE_P2P_WRITE_MAILBOX_SIZE * local2Remote,
-                PCIE_P2P_WRITE_MAILBOX_SIZE, ppWMBoxMemDesc);
+    RmPhysAddr fbBase = gpumgrGetGpuPhysFbAddr(pGpu0);
+    NvU64 mailboxOffset = pKernelBus0->p2pPcie.writeMailboxBar1Addr;
+    NvU64 peerOffset = PCIE_P2P_WRITE_MAILBOX_SIZE * local2Remote;
+    RmPhysAddr base;
+
+    if (pKernelBus0->p2pPcie.writeMailboxBar1Addr ==
+        PCIE_P2P_INVALID_WRITE_MAILBOX_ADDR)
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "PCIe mailbox P2P requested without an allocated mailbox area "
+                  "ownerGpu=%u accessorGpu=%u peer=%u writeMailboxBar1Addr=0x%llx\n",
+                  gpuGetInstance(pGpu0),
+                  gpuGetInstance(pGpu1),
+                  local2Remote,
+                  pKernelBus0->p2pPcie.writeMailboxBar1Addr);
+        return ~0ULL;
+    }
+
+    base = fbBase + mailboxOffset + peerOffset;
+
+    return kbusSetupPeerBarAccess(pGpu0, pGpu1, base,
+                                  PCIE_P2P_WRITE_MAILBOX_SIZE, ppWMBoxMemDesc);
 }
 
 void
@@ -353,9 +535,20 @@ kbusCreateP2PMappingForMailbox_GM200
     NvU32      attributes
 )
 {
-    RM_API *pRmApi;
-    NV2080_CTRL_INTERNAL_HSHUB_PEER_CONN_CONFIG_PARAMS params;
     NvU32 gpuInst0, gpuInst1;
+    NvBool bPeer0HshubProgrammed = NV_FALSE;
+    NvBool bPeer1HshubProgrammed = NV_FALSE;
+    NvBool bPeer0MailboxTeardownNeeded = NV_FALSE;
+    NvBool bPeer1MailboxTeardownNeeded = NV_FALSE;
+    NvBool bPeer0MailboxTeardownAttempted = NV_FALSE;
+    NvBool bPeer1MailboxTeardownAttempted = NV_FALSE;
+    NvU32 oldPeer0RemotePeerId;
+    NvU32 oldPeer1RemotePeerId;
+    NvU32 oldPeer0RefCount;
+    NvU32 oldPeer1RefCount;
+    NvU32 oldPeerMask0;
+    NvU32 oldPeerMask1;
+    NV_STATUS status;
 
     if (IS_VIRTUAL(pGpu0) || IS_VIRTUAL(pGpu1))
     {
@@ -397,25 +590,26 @@ kbusCreateP2PMappingForMailbox_GM200
                 NV_ASSERT(pKernelBus0->p2pPcie.busPeer[*peer0].remotePeerId == *peer1);
                 NV_ASSERT(pKernelBus1->p2pPcie.busPeer[*peer1].remotePeerId == *peer0);
 
-                pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu0);
-                portMemSet(&params, 0, sizeof(params));
-                params.programPciePeerMask = NVBIT32(*peer0);
-                NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                                       pGpu0->hInternalClient,
-                                       pGpu0->hInternalSubdevice,
-                                       NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
-                                       &params,
-                                       sizeof(params)));
+                status = _kbusProgramPciePeerMask_GM200(pGpu0, NVBIT32(*peer0));
+                if (status != NV_OK)
+                {
+                    pKernelBus0->p2pPcie.busPeer[*peer0].refCount--;
+                    pKernelBus1->p2pPcie.busPeer[*peer1].refCount--;
+                    return status;
+                }
 
-                pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu1);
-                portMemSet(&params, 0, sizeof(params));
-                params.programPciePeerMask = NVBIT32(*peer1);
-                NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                                       pGpu1->hInternalClient,
-                                       pGpu1->hInternalSubdevice,
-                                       NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
-                                       &params,
-                                       sizeof(params)));
+                status = _kbusProgramPciePeerMask_GM200(pGpu1, NVBIT32(*peer1));
+                if (status != NV_OK)
+                {
+                    //
+                    // The mapping pre-exists and its HSHUB peer masks are
+                    // still needed by the existing references, so only drop
+                    // the references taken above.
+                    //
+                    pKernelBus0->p2pPcie.busPeer[*peer0].refCount--;
+                    pKernelBus1->p2pPcie.busPeer[*peer1].refCount--;
+                    return status;
+                }
 
                 return NV_OK;
             }
@@ -449,25 +643,26 @@ kbusCreateP2PMappingForMailbox_GM200
         NV_ASSERT(!pKernelBus0->p2pPcie.busPeer[*peer0].bReserved);
         NV_ASSERT(!pKernelBus1->p2pPcie.busPeer[*peer1].bReserved);
 
-        pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu0);
-        portMemSet(&params, 0, sizeof(params));
-        params.programPciePeerMask = NVBIT32(*peer0);
-        NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                               pGpu0->hInternalClient,
-                               pGpu0->hInternalSubdevice,
-                               NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
-                               &params,
-                               sizeof(params)));
+        status = _kbusProgramPciePeerMask_GM200(pGpu0, NVBIT32(*peer0));
+        if (status != NV_OK)
+        {
+            pKernelBus0->p2pPcie.busPeer[*peer0].refCount--;
+            pKernelBus1->p2pPcie.busPeer[*peer1].refCount--;
+            return status;
+        }
 
-        pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu1);
-        portMemSet(&params, 0, sizeof(params));
-        params.programPciePeerMask = NVBIT32(*peer1);
-        NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                               pGpu1->hInternalClient,
-                               pGpu1->hInternalSubdevice,
-                               NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
-                               &params,
-                               sizeof(params)));
+        status = _kbusProgramPciePeerMask_GM200(pGpu1, NVBIT32(*peer1));
+        if (status != NV_OK)
+        {
+            //
+            // The mapping pre-exists and its HSHUB peer masks are still
+            // needed by the existing references, so only drop the
+            // references taken above.
+            //
+            pKernelBus0->p2pPcie.busPeer[*peer0].refCount--;
+            pKernelBus1->p2pPcie.busPeer[*peer1].refCount--;
+            return status;
+        }
 
         return NV_OK;
     }
@@ -521,6 +716,13 @@ kbusCreateP2PMappingForMailbox_GM200
     }
 
 busCreateP2PMapping_setupMapping:
+    oldPeer0RemotePeerId = pKernelBus0->p2pPcie.busPeer[*peer0].remotePeerId;
+    oldPeer1RemotePeerId = pKernelBus1->p2pPcie.busPeer[*peer1].remotePeerId;
+    oldPeer0RefCount = pKernelBus0->p2pPcie.busPeer[*peer0].refCount;
+    oldPeer1RefCount = pKernelBus1->p2pPcie.busPeer[*peer1].refCount;
+    oldPeerMask0 = pKernelBus0->p2pPcie.peerNumberMask[gpuInst1];
+    oldPeerMask1 = pKernelBus1->p2pPcie.peerNumberMask[gpuInst0];
+
     pKernelBus0->p2pPcie.busPeer[*peer0].remotePeerId = *peer1;
     pKernelBus0->p2pPcie.peerNumberMask[gpuInst1] |= NVBIT(*peer0);
     pKernelBus1->p2pPcie.busPeer[*peer1].remotePeerId = *peer0;
@@ -538,34 +740,80 @@ busCreateP2PMapping_setupMapping:
     pKernelBus0->p2pPcie.busPeer[*peer0].refCount++;
     pKernelBus1->p2pPcie.busPeer[*peer1].refCount++;
 
-    pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu0);
-    portMemSet(&params, 0, sizeof(params));
-    params.programPciePeerMask = NVBIT32(*peer0);
-    NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                           pGpu0->hInternalClient,
-                           pGpu0->hInternalSubdevice,
-                           NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
-                           &params,
-                           sizeof(params)));
+    status = _kbusProgramPciePeerMask_GM200(pGpu0, NVBIT32(*peer0));
+    if (status != NV_OK)
+    {
+        goto busCreateP2PMapping_rollback;
+    }
+    bPeer0HshubProgrammed = NV_TRUE;
 
-    pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu1);
-    portMemSet(&params, 0, sizeof(params));
-    params.programPciePeerMask = NVBIT32(*peer1);
-    NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
-                           pGpu1->hInternalClient,
-                           pGpu1->hInternalSubdevice,
-                           NV2080_CTRL_CMD_INTERNAL_HSHUB_PEER_CONN_CONFIG,
-                           &params,
-                           sizeof(params)));
+    status = _kbusProgramPciePeerMask_GM200(pGpu1, NVBIT32(*peer1));
+    if (status != NV_OK)
+    {
+        goto busCreateP2PMapping_rollback;
+    }
+    bPeer1HshubProgrammed = NV_TRUE;
+
+    status = _kbusSetupMailboxes_GM200(pGpu0, pKernelBus0, pGpu1, pKernelBus1,
+                                       *peer0, *peer1,
+                                       &bPeer0MailboxTeardownAttempted,
+                                       &bPeer1MailboxTeardownAttempted);
+    if (status != NV_OK)
+    {
+        goto busCreateP2PMapping_rollback;
+    }
+    bPeer0MailboxTeardownNeeded = NV_TRUE;
+    bPeer1MailboxTeardownNeeded = NV_TRUE;
+
+    status = _kbusSetupMailboxes_GM200(pGpu1, pKernelBus1, pGpu0, pKernelBus0,
+                                       *peer1, *peer0,
+                                       &bPeer1MailboxTeardownAttempted,
+                                       &bPeer0MailboxTeardownAttempted);
+    if (status != NV_OK)
+    {
+        goto busCreateP2PMapping_rollback;
+    }
 
     NV_PRINTF(LEVEL_INFO,
               "added PCIe P2P mapping between GPU%u (peer %u) and GPU%u (peer %u)\n",
               gpuInst0, *peer0, gpuInst1, *peer1);
 
-    kbusSetupMailboxes_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1, *peer0, *peer1);
-    kbusSetupMailboxes_HAL(pGpu1, pKernelBus1, pGpu0, pKernelBus0, *peer1, *peer0);
-
     return NV_OK;
+
+busCreateP2PMapping_rollback:
+    if (bPeer0MailboxTeardownNeeded && !bPeer0MailboxTeardownAttempted)
+    {
+        kbusDestroyMailbox(pGpu0, pKernelBus0, pGpu1, *peer0);
+        bPeer0MailboxTeardownAttempted = NV_TRUE;
+    }
+
+    if (bPeer1MailboxTeardownNeeded && !bPeer1MailboxTeardownAttempted)
+    {
+        kbusDestroyMailbox(pGpu1, pKernelBus1, pGpu0, *peer1);
+        bPeer1MailboxTeardownAttempted = NV_TRUE;
+    }
+
+    if (bPeer0HshubProgrammed && !bPeer0MailboxTeardownAttempted)
+    {
+        NV_ASSERT_OK(_kbusInvalidatePeerMask_GM200(pGpu0, NVBIT32(*peer0)));
+    }
+
+    if (bPeer1HshubProgrammed && !bPeer1MailboxTeardownAttempted)
+    {
+        NV_ASSERT_OK(_kbusInvalidatePeerMask_GM200(pGpu1, NVBIT32(*peer1)));
+    }
+
+    pKernelBus0->p2pPcie.busPeer[*peer0].remotePeerId = oldPeer0RemotePeerId;
+    pKernelBus1->p2pPcie.busPeer[*peer1].remotePeerId = oldPeer1RemotePeerId;
+    pKernelBus0->p2pPcie.busPeer[*peer0].refCount = oldPeer0RefCount;
+    pKernelBus1->p2pPcie.busPeer[*peer1].refCount = oldPeer1RefCount;
+    pKernelBus0->p2pPcie.peerNumberMask[gpuInst1] = oldPeerMask0;
+    pKernelBus1->p2pPcie.peerNumberMask[gpuInst0] = oldPeerMask1;
+
+    *peer0 = BUS_INVALID_PEER;
+    *peer1 = BUS_INVALID_PEER;
+
+    return status;
 }
 
 /*!
@@ -797,6 +1045,15 @@ kbusSetP2PMailboxBar1Area_GM200
 
     if (!kbusIsP2pMailboxClientAllocated(pKernelBus))
     {
+        if (pKernelBus->p2pPcie.writeMailboxBar1Addr ==
+            PCIE_P2P_INVALID_WRITE_MAILBOX_ADDR)
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                      "P2P mailbox area expected from RM but no valid address is installed gpu=%u\n",
+                      gpuGetInstance(pGpu));
+            return NV_ERR_INVALID_STATE;
+        }
+
         // P2P mailbox area already allocated by RM. Nothing to do.
         return NV_OK;
     }
