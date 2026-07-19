@@ -13,6 +13,7 @@ for the original description of the approach.
 | RTX 3090 | Pairwise NVLink where available, PCIe BAR1 otherwise                   |
 | RTX 4090 | PCIe BAR1                                                              |
 | RTX 5090 | PCIe BAR1                                                              |
+| RTX 5060 Ti / 5060 (GB206) | PCIe BAR1, including with a display attached         |
 
 P2P also works between different devices of the same generation, for example RTX 5090
 to RTX PRO 6000 Blackwell.
@@ -22,6 +23,10 @@ to RTX PRO 6000 Blackwell.
 This enables BAR1 P2P on consumer GPUs where NVLink isn't available, and falls back to
 NVLink where it is. For PCIe pairs, transfers write directly to the other GPU's physical
 address over DMA.
+
+On GB206 cards (RTX 5060 Ti / 5060) BAR1 P2P works even when a display is attached: the
+static BAR1 window is placed above the console reservation instead of requiring all of
+BAR1, and allocations that don't fit in the window fall back to dynamic mappings.
 
 > [!WARNING]
 > IOMMU must be in passthrough mode (`iommu=pt`), not translating, or DMA will go through
