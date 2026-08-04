@@ -1243,7 +1243,7 @@ osDestroyOsDescriptorPageArray
     // Read before nv_unregister_user_pages frees the nv_alloc_t.
     compoundOrder = nv_get_compound_order(pPrivate);
 
-    if (compoundOrder > 0)
+    if (compoundOrder > 0 || IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
         osPageCount = pMemDesc->PageCount;
     else
         osPageCount = NV_RM_PAGES_TO_OS_PAGES(pMemDesc->PageCount);
