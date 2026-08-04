@@ -66,8 +66,9 @@ result were captured before reboot; this file records the durable summary.
 The production predicate is additive: property-enabled GPUs use display-aware
 placement only when runtime geometry covers all aligned client FB, while GB206
 retains the tested partial-window exception. Other partial geometries are not
-generalized. `tests/bar1_p2p_policy_test.c` verifies the policy truth table and
-that the existing exception cannot become a rejection.
+generalized. `make -C tests check` runs `tests/bar1_p2p_policy_test.c` to verify
+the policy truth table and that the existing exception cannot become a
+rejection.
 
 Generated HAL dispatch, the global `pcieP2PType` default, registry precedence,
 and the GH100 BAR1 routing source were unchanged. Their pre/post hashes matched.
