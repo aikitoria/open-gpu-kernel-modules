@@ -264,6 +264,54 @@ static void nv_free_page_array(struct page **pages)
     os_free_mem((NvU8 *)pages - NV_PAGE_ARRAY_HEADER_SIZE);
 }
 
+static NvBool nv_hugetlb_fast_path_eligible(
+    struct vm_area_struct *vma,
+    unsigned long start,
+    NvU64 page_count,
+    unsigned long *hpage_size_out,
+    unsigned int *compound_order_out
+)
+{
+    NvU64 range_size;
+    NvU64 pages_per_hugepage;
+    unsigned long end;
+    unsigned long hpage_size;
+
+    if (!vma || !is_vm_hugetlb_page(vma) || page_count == 0)
+        return NV_FALSE;
+
+    if (page_count > ((NvU64)ULONG_MAX / PAGE_SIZE))
+        return NV_FALSE;
+
+    range_size = page_count * PAGE_SIZE;
+    if (range_size > ULONG_MAX || start > (ULONG_MAX - (unsigned long)range_size))
+        return NV_FALSE;
+
+    end = start + (unsigned long)range_size;
+    hpage_size = vma_kernel_pagesize(vma);
+
+    if (hpage_size < PAGE_SIZE || hpage_size > NV_U32_MAX ||
+        (hpage_size & (hpage_size - 1)) != 0)
+    {
+        return NV_FALSE;
+    }
+
+    if ((start & (hpage_size - 1)) != 0 ||
+        (range_size & (hpage_size - 1)) != 0 ||
+        end > vma->vm_end)
+    {
+        return NV_FALSE;
+    }
+
+    pages_per_hugepage = hpage_size / PAGE_SIZE;
+    if ((pages_per_hugepage & (pages_per_hugepage - 1)) != 0)
+        return NV_FALSE;
+
+    *hpage_size_out = hpage_size;
+    *compound_order_out = ilog2(pages_per_hugepage);
+    return NV_TRUE;
+}
+
 NV_STATUS NV_API_CALL os_lock_user_pages(
     void   *address,
     NvU64   page_count,
@@ -303,47 +351,48 @@ NV_STATUS NV_API_CALL os_lock_user_pages(
      * unfaulted 1GB hugepages (~37ms per fault).
      */
     {
-        struct vm_area_struct *vma = vma_lookup(mm, (unsigned long)address);
+        unsigned long start = (unsigned long)address;
+        struct vm_area_struct *vma = vma_lookup(mm, start);
+        unsigned long hpage_size;
+        unsigned int order;
 
-        if (vma && is_vm_hugetlb_page(vma))
+        if (nv_hugetlb_fast_path_eligible(vma,
+                                          start,
+                                          page_count,
+                                          &hpage_size,
+                                          &order))
         {
-            unsigned long hpage_size = vma_kernel_pagesize(vma);
-            unsigned int order = ilog2(hpage_size / PAGE_SIZE);
-            NvU64 pages_per_hp = 1ULL << order;
+            NvU64 num_hugepages = page_count >> order;
 
-            if ((page_count & (pages_per_hp - 1)) == 0)
+            rmStatus = nv_alloc_page_array(num_hugepages, order, &user_pages);
+            if (rmStatus != NV_OK)
             {
-                NvU64 num_hugepages = page_count >> order;
-
-                rmStatus = nv_alloc_page_array(num_hugepages, order, &user_pages);
-                if (rmStatus != NV_OK)
-                {
-                    nv_mmap_read_unlock(mm);
-                    nv_printf(NV_DBG_ERRORS,
-                            "NVRM: failed to allocate hugepage table!\n");
-                    return rmStatus;
-                }
-
-                for (i = 0; i < num_hugepages; i++)
-                {
-                    ret = NV_PIN_USER_PAGES(
-                        (unsigned long)address + i * hpage_size,
-                        1, gup_flags, &user_pages[i]);
-                    if (ret != 1)
-                    {
-                        for (j = 0; j < i; j++)
-                            NV_UNPIN_USER_PAGE(user_pages[j]);
-                        nv_free_page_array(user_pages);
-                        nv_mmap_read_unlock(mm);
-                        return NV_ERR_INVALID_ADDRESS;
-                    }
-                }
-
                 nv_mmap_read_unlock(mm);
-
-                *page_array = user_pages;
-                return NV_OK;
+                nv_printf(NV_DBG_ERRORS,
+                        "NVRM: failed to allocate hugepage table!\n");
+                return rmStatus;
             }
+
+            for (i = 0; i < num_hugepages; i++)
+            {
+                ret = NV_PIN_USER_PAGES(start + i * hpage_size,
+                                        1,
+                                        gup_flags,
+                                        &user_pages[i]);
+                if (ret != 1)
+                {
+                    for (j = 0; j < i; j++)
+                        NV_UNPIN_USER_PAGE(user_pages[j]);
+                    nv_free_page_array(user_pages);
+                    nv_mmap_read_unlock(mm);
+                    return NV_ERR_INVALID_ADDRESS;
+                }
+            }
+
+            nv_mmap_read_unlock(mm);
+
+            *page_array = user_pages;
+            return NV_OK;
         }
     }
 
