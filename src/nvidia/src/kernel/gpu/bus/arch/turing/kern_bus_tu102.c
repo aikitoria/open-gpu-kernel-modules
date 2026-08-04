@@ -459,8 +459,8 @@ kbusIsStaticBar1Supported_TU102
 
                 if (bar1VASizeAligned < (staticBar1Offset + bar1MapSize))
                 {
-                    NV_PRINTF(LEVEL_ERROR, "BAR1 size %lld is not large enough to map FB size"
-                                           "%lld at offset %lld to force static BAR1\n",
+                    NV_PRINTF(LEVEL_ERROR, "BAR1 size %" NvU64_fmtu " is not large enough to map FB size "
+                                           "%" NvU64_fmtu " at offset %" NvU64_fmtu " to force static BAR1\n",
                                             bar1VASizeAligned, bar1MapSize, staticBar1Offset);
                     DBG_BREAKPOINT();
 
