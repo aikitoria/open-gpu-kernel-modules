@@ -194,7 +194,12 @@ kbusInitRegistryOverrides(OBJGPU *pGpu, KernelBus *pKernelBus)
     }
     else
     {
-        pKernelBus->staticBar1ForceType = NV_REG_STR_RM_FORCE_STATIC_BAR1_AUTO;
+        // This branch enables BAR1 P2P on consumer Blackwell GPUs.  The auto
+        // policy can reject a display-driving 32 GB BAR because its conservative
+        // sizing includes worst-case UserD/doorbell overhead in addition to the
+        // console reservation.  Force the static mapping by default; the force
+        // path still verifies that the client-visible FB mapping fits in BAR1.
+        pKernelBus->staticBar1ForceType = NV_REG_STR_RM_FORCE_STATIC_BAR1_ENABLE;
     }
 
     //
