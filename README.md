@@ -1,7 +1,7 @@
 # NVIDIA driver 610.43.03 with P2P for RTX 3090, RTX 4090, and RTX 5090
 
-This enables P2P on consumer GPUs with the 610.43.03 driver version. No kernel parameters
-are needed for the default behavior, just build, install, and go.
+This enables P2P on consumer GPUs with the 610.43.03 driver version. The current branch
+requires the IOMMU passthrough configuration described below.
 
 See the [tinygrad 550.54.15-p2p README](https://github.com/tinygrad/open-gpu-kernel-modules/blob/550.54.15-p2p/README.md)
 for the original description of the approach.
@@ -24,9 +24,10 @@ NVLink where it is. For PCIe pairs, transfers write directly to the other GPU's 
 address over DMA.
 
 > [!WARNING]
-> IOMMU must be in passthrough mode (`iommu=pt`), not translating, or DMA will go through
-> IOMMU page tables and transfers will fail. This is very dangerous if you run untrusted
-> software or devices.
+> IOMMU must currently be in passthrough mode (`iommu=pt`), not translating. In particular,
+> the experimental hugetlb registration path does not yet handle scatterlist entries merged
+> by a translated IOMMU. Do not use translated mode until that path is fixed and validated.
+> Passthrough mode weakens DMA isolation and is unsafe with untrusted software or devices.
 
 ## How to use
 
@@ -52,17 +53,19 @@ options nvidia NVreg_RegistryDwords="RMForceP2PType=1"
 
 This branch also includes an experimental path that accelerates `cudaHostRegister` by
 several orders of magnitude when the registered buffer is backed by 1G hugepages, and
-shrinks the device page tables used for such mappings. It is enabled automatically. This
-path skips some of the per-4K-page bookkeeping the stock driver performs, so it may
-misbehave in edge cases the stock driver handles correctly.
+shrinks the device page tables used for such mappings. It is enabled automatically for a
+non-empty registration that is hugepage-aligned, is an exact multiple of the hugepage
+size, and stays within one hugetlb VMA. Other layouts use the normal per-page array path.
+The fast path still skips some base-page bookkeeping and remains experimental.
 
 ## Potential issues
 
 If P2P transfers are slow, make sure your IOMMU is in passthrough (`pt`) mode and that ACS
-is disabled. ACS on root ports forces all GPU-to-GPU traffic through the CPU root complex,
-killing P2P bandwidth. ACS can be disabled in BIOS, with the
-`pcie_acs_override=downstream,multifunction` kernel parameter (if your kernel supports it),
-or with an ACS override patch applied to the kernel.
+redirect is not forcing GPU-to-GPU traffic through the root complex. Prefer a firmware ACS
+control. If the kernel supports the upstream per-device option, use a narrowly scoped
+`pci=disable_acs_redir=<BDF>[;<BDF>...]` setting and verify the resulting IOMMU groups.
+Disabling ACS redirect weakens device isolation; do not use the broad `pcie_acs_override`
+patch or kernel parameter.
 
 ## Sample `p2pBandwidthLatencyTest` output
 
