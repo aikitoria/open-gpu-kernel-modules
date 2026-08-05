@@ -3934,22 +3934,42 @@ nvGpuOpsMemGetPageSize
  *
  * @param[in] pAddresses        : Array of physical addresses to be encoded.
  * @param[in] dmaBaseAddress    : IOVA base address.
+ * @param[in] dmaSize           : IOVA window size.
+ * @param[in] pageSize          : Size covered by each physical address.
  * @param[in] count             : Count of physical addresses.
  */
-static void
+static NV_STATUS
 _nvGpuOpsEncodeBar1P2PAddrs
 (
     NvU64 *pAddresses,
     NvU64  dmaBaseAddress,
+    NvU64  dmaSize,
+    NvU64  pageSize,
     NvU64  count
 )
 {
-    NvU32 i;
+    NvU64 i;
 
     for (i = 0; i < count; i++)
     {
-        pAddresses[i] = dmaBaseAddress + pAddresses[i];
+        NvU64 offset = pAddresses[i];
+        NvU64 encodedAddress;
+
+        if ((offset >= dmaSize) ||
+            (pageSize > (dmaSize - offset)) ||
+            !portSafeAddU64(dmaBaseAddress, offset, &encodedAddress))
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                      "BAR1 P2P address range exceeds DMA window: "
+                      "offset=0x%llx pageSize=0x%llx dmaBase=0x%llx dmaSize=0x%llx\n",
+                      offset, pageSize, dmaBaseAddress, dmaSize);
+            return NV_ERR_INVALID_ADDRESS;
+        }
+
+        pAddresses[i] = encodedAddress;
     }
+
+    return NV_OK;
 }
 
 static
@@ -4289,7 +4309,13 @@ nvGpuOpsBuildExternalAllocPtes
             status = NV_ERR_INVALID_STATE;
             goto done;
         }
-        _nvGpuOpsEncodeBar1P2PAddrs(physicalAddresses, dmaBaseAddress, pteCount);
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                            _nvGpuOpsEncodeBar1P2PAddrs(physicalAddresses,
+                                                        dmaBaseAddress,
+                                                        dmaSize,
+                                                        mappingPageSize,
+                                                        pteCount),
+                            done);
     }
     else
     {
@@ -4623,7 +4649,13 @@ nvGpuOpsBuildExternalAllocPhysAddrs
             status = NV_ERR_INVALID_STATE;
             goto done;
         }
-        _nvGpuOpsEncodeBar1P2PAddrs(physicalAddresses, dmaBaseAddress, physAddrCount);
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                            _nvGpuOpsEncodeBar1P2PAddrs(physicalAddresses,
+                                                        dmaBaseAddress,
+                                                        dmaSize,
+                                                        mappingPageSize,
+                                                        physAddrCount),
+                            done);
     }
     else
     {
