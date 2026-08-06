@@ -24,11 +24,12 @@ This enables BAR1 P2P on consumer GPUs where NVLink isn't available, and falls b
 NVLink where it is. For PCIe pairs, transfers write directly to the other GPU's physical
 address over DMA.
 
-On default-enabled GPUs, display-aware static BAR1 placement is used when runtime geometry
-covers all aligned client framebuffer memory. GB206 cards (RTX 5060 Ti / 5060) retain an
-experimental partial-window exception so inside-range P2P works with a display attached.
-Allocations spanning or outside that partial static window are rejected by the CUDA API;
-there is currently no transparent dynamic-mapping fallback for those allocations.
+On property-enabled GPUs, display-aware static BAR1 placement is used whenever runtime
+geometry leaves a non-empty aligned static window after fixed console and mailbox
+reservations. Partial windows support allocations wholly inside that window; allocations
+spanning or outside it are rejected by the CUDA API because there is currently no
+transparent dynamic-mapping fallback. GB206 cards (RTX 5060 Ti / 5060) are the
+hardware-validated partial-coverage example, not an implementation allowlist.
 
 > [!WARNING]
 > IOMMU must currently be in passthrough mode (`iommu=pt`), not translating. In particular,

@@ -396,20 +396,15 @@ kbusIsStaticBar1Supported_TU102
     NvU64 maxStaticMapSize =
         (bar1VASizeAligned > staticBar1Offset) ?
             RM_ALIGN_DOWN(bar1VASizeAligned - staticBar1Offset, RM_PAGE_SIZE_2M) : 0;
-    NvBool bCompleteStaticCoverage =
-        ((clientFbSizeAligned != 0) && (maxStaticMapSize >= clientFbSizeAligned));
-    NvBool bGb206CoverageException =
-        ((gpuGetChipImpl(pGpu) == GPU_IMPLEMENTATION_GB206) &&
-         (maxStaticMapSize != 0));
     NvBool bUseDisplayAwareStaticBar1 =
         KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(bBar1P2PDefault,
-                                           bCompleteStaticCoverage,
-                                           bGb206CoverageException);
+                                           clientFbSizeAligned,
+                                           maxStaticMapSize);
     //
-    // Default-enabled GPUs may place a complete static mapping after fixed
-    // console/mailbox mappings when runtime geometry covers all aligned client
-    // FB. Preserve the tested GB206 partial-window behavior, but do not extend
-    // partial coverage to other implementations.
+    // Default-enabled GPUs may place a complete or partial static mapping
+    // after fixed console/mailbox mappings whenever runtime geometry leaves a
+    // non-empty aligned window. External mappings are checked against the
+    // resulting DMA window, so spanning and outside allocations fail safely.
     //
     NvU64 autoStaticMapSize = bUseDisplayAwareStaticBar1 ?
         ((clientFbSizeAligned < maxStaticMapSize) ?
@@ -607,15 +602,10 @@ kbusEnableStaticBar1Mapping_TU102
         NvU64 maxStaticMapSize =
             (bar1Offset < bar1VASizeAligned) ?
                 RM_ALIGN_DOWN(bar1VASizeAligned - bar1Offset, RM_PAGE_SIZE_2M) : 0;
-        NvBool bCompleteStaticCoverage =
-            ((clientFbSizeAligned != 0) && (maxStaticMapSize >= clientFbSizeAligned));
-        NvBool bGb206CoverageException =
-            ((gpuGetChipImpl(pGpu) == GPU_IMPLEMENTATION_GB206) &&
-             (maxStaticMapSize != 0));
         NvBool bUseDisplayAwareStaticBar1 =
             KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(bBar1P2PDefault,
-                                               bCompleteStaticCoverage,
-                                               bGb206CoverageException);
+                                               clientFbSizeAligned,
+                                               maxStaticMapSize);
 
         if (bUseDisplayAwareStaticBar1 && (bar1MapSize > maxStaticMapSize))
         {
@@ -1163,11 +1153,11 @@ kbusGetStaticFbAperture_TU102
     {
         //
         // The static region may not cover all of client FB: it is rounded
-        // down to 2MB, and on display-attached GB206 it is clipped to the
-        // BAR1 VA left after the console/mailbox reservation. The static BAR1
-        // path cannot represent a range spanning that boundary; current CUDA
-        // P2P callers receive a predictable API rejection rather than a
-        // transparent dynamic-mapping fallback.
+        // down to 2MB and may be clipped to the BAR1 VA left after the
+        // console/mailbox reservation. The static BAR1 path cannot represent
+        // a range spanning that boundary; current CUDA P2P callers receive a
+        // predictable API rejection rather than a transparent dynamic-mapping
+        // fallback.
         //
         return NV_ERR_NOT_SUPPORTED;
     }

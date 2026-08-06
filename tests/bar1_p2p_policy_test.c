@@ -6,31 +6,21 @@
 
 int main(void)
 {
-    int defaultEnabled;
-    int fullCoverage;
-    int gb206Exception;
+    const unsigned long long clientFbSize = 16ULL << 30;
+    const unsigned long long partialStaticSize = 15ULL << 30;
 
-    for (defaultEnabled = 0; defaultEnabled <= 1; ++defaultEnabled)
-    {
-        for (fullCoverage = 0; fullCoverage <= 1; ++fullCoverage)
-        {
-            for (gb206Exception = 0; gb206Exception <= 1; ++gb206Exception)
-            {
-                int oldAccepted = defaultEnabled && gb206Exception;
-                int newAccepted = KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(
-                    defaultEnabled, fullCoverage, gb206Exception);
+    assert(!KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(0, clientFbSize,
+                                                  partialStaticSize));
+    assert(!KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, 0,
+                                                  partialStaticSize));
+    assert(!KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, clientFbSize, 0));
 
-                assert(!oldAccepted || newAccepted);
-                assert(newAccepted ==
-                       (defaultEnabled && (fullCoverage || gb206Exception)));
-            }
-        }
-    }
-
-    assert(KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, 1, 0));
-    assert(KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, 0, 1));
-    assert(!KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, 0, 0));
-    assert(!KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(0, 1, 1));
+    assert(KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, clientFbSize,
+                                                 partialStaticSize));
+    assert(KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, clientFbSize,
+                                                 clientFbSize));
+    assert(KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(1, clientFbSize,
+                                                 clientFbSize + (1ULL << 30)));
 
     return 0;
 }

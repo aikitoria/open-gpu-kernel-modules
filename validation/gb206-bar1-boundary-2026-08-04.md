@@ -63,12 +63,37 @@ result were captured before reboot; this file records the durable summary.
 
 ## Production policy and routing audit
 
-The production predicate is additive: property-enabled GPUs use display-aware
-placement only when runtime geometry covers all aligned client FB, while GB206
-retains the tested partial-window exception. Other partial geometries are not
-generalized. `make -C tests check` runs `tests/bar1_p2p_policy_test.c` to verify
-the policy truth table and that the existing exception cannot become a
-rejection.
+At the commit validated by this record, the production predicate was additive:
+property-enabled GPUs used display-aware placement when runtime geometry
+covered all aligned client FB, while GB206 retained the tested partial-window
+exception. `make -C tests check` ran `tests/bar1_p2p_policy_test.c` to verify
+that policy truth table.
+
+The policy was subsequently generalized to use only the existing BAR1 P2P
+device property and runtime geometry. Any property-enabled GPU with a non-empty
+aligned client FB range and non-empty aligned static BAR1 window may use the
+same partial-window behavior. This record remains hardware evidence for GB206;
+it does not claim that other partial-window implementations were tested.
+
+### Post-generalization GB206 regression
+
+On 2026-08-05, the generalized runtime policy was built as all five kernel
+modules, signed with the enrolled Secure Boot key, installed on kernel
+`7.0.0-29-generic`, and exercised on the same two RTX 5060 Ti GPUs. The bounded
+boundary run completed with 492 inside passes and no data errors. On the
+partial-coverage GPU, the established 64 MiB spanning candidate and a prepared
+4 MiB outside candidate were rejected by the retained static-aperture bounds
+checks. Local access remained healthy and the immediate three-iteration inside
+recovery passed. The other GPU reached ordinary allocation exhaustion without
+an unsafe mapping or data error.
+
+`simpleP2P` passed before and after the boundary run at 13.05 and 13.03 GB/s.
+`p2pBandwidthLatencyTest` measured 14.09 GB/s in each unidirectional direction
+and 27.79 GB/s bidirectionally. The post-load kernel log contained the expected
+fail-closed boundary diagnostics and no Xid, assertion, IOMMU/MMU fault, AER
+error, oops, panic, or hung-task report. This regression confirms unchanged
+GB206 behavior; other partial-window GPU implementations remain hardware
+validation follow-ups.
 
 Generated HAL dispatch, the global `pcieP2PType` default, registry precedence,
 and the GH100 BAR1 routing source were unchanged. Their pre/post hashes matched.

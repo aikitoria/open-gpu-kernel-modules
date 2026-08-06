@@ -25,11 +25,12 @@
 #define KERN_BUS_BAR1_P2P_POLICY_H
 
 /*
- * Display-aware placement is additive for default-enabled devices whose
- * runtime BAR1 geometry covers all aligned client FB. GB206 keeps its tested
- * partial-window exception; other partial windows are not generalized.
+ * Display-aware placement is additive for default-enabled devices with a
+ * non-empty aligned client FB range and a non-empty aligned static BAR1
+ * window. Partial windows are safe because each external mapping is checked
+ * against the selected static BAR1 DMA window before its addresses are used.
  */
-#define KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(defaultEnabled, fullCoverage, gb206Exception) \
-    ((defaultEnabled) && ((fullCoverage) || (gb206Exception)))
+#define KBUS_USE_DISPLAY_AWARE_STATIC_BAR1(defaultEnabled, clientFbSize, maxStaticMapSize) \
+    ((defaultEnabled) && ((clientFbSize) != 0) && ((maxStaticMapSize) != 0))
 
 #endif // KERN_BUS_BAR1_P2P_POLICY_H
