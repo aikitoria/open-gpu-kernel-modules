@@ -27,11 +27,15 @@
 #include "nv-msi.h"
 #include "nv-hypervisor.h"
 #include "nv-reg.h"
+#include "dmabuf-gdr-topology-policy.h"
 
 #if defined(NV_VGPU_KVM_BUILD)
 #include "nv-vgpu-vfio-interface.h"
 #endif
 #include <linux/iommu.h>
+#if defined(CONFIG_PCI_P2PDMA)
+#include <linux/pci-p2pdma.h>
+#endif
 
 #include <linux/clk.h>
 #include <linux/device.h>
@@ -2890,24 +2894,93 @@ nv_pci_count_devices(void)
  */
 NvBool nv_pci_is_valid_topology_for_direct_pci(
     nv_state_t     *nv,
-    struct pci_dev *peer
+    struct pci_dev *peer,
+    NvBool         *skip_iommu
 )
 {
     struct pci_dev *pdev0 = to_pci_dev(nv->dma_dev->dev);
     struct pci_dev *pdev1 = peer;
+    NvBool result = NV_FALSE;
+    NvBool identity_iommu = NV_FALSE;
+    NvBool bar_addressable = NV_FALSE;
+    NvBool experimental = nv->experimental_dmabuf_p2p_enabled;
+    NvS32 p2p_distance = -1;
+    NvU64 dma_mask = dma_get_mask(&pdev1->dev);
+
+    *skip_iommu = NV_TRUE;
 
     if (!nv->coherent)
     {
-        return NV_FALSE;
+#if defined(CONFIG_PCI_P2PDMA) && defined(NV_IOMMU_IS_DMA_DOMAIN_PRESENT)
+        struct iommu_domain *domain;
+        domain = iommu_get_domain_for_dev(&pdev1->dev);
+        if (domain != NULL)
+        {
+            identity_iommu = (domain->type == IOMMU_DOMAIN_IDENTITY);
+        }
+
+        bar_addressable = DMABUF_GDR_BAR_ADDRESSABLE(
+            nv->bars[NV_GPU_BAR_INDEX_FB].cpu_address,
+            nv->bars[NV_GPU_BAR_INDEX_FB].size,
+            dma_mask);
+
+        if (experimental && identity_iommu && bar_addressable)
+        {
+            p2p_distance = pci_p2pdma_distance(pdev0, &pdev1->dev, NV_TRUE);
+        }
+
+        result = DMABUF_GDR_TOPOLOGY_ALLOWED(
+            experimental,
+            identity_iommu,
+            p2p_distance,
+            nv->bars[NV_GPU_BAR_INDEX_FB].cpu_address,
+            nv->bars[NV_GPU_BAR_INDEX_FB].size,
+            dma_mask);
+
+        if (result)
+        {
+            // Map BAR1 through the importer's DMA API; do not bypass its IOMMU.
+            *skip_iommu = NV_FALSE;
+        }
+#endif
+    }
+    else if (pdev0->dev.iommu_group == pdev1->dev.iommu_group)
+    {
+        result = NV_TRUE;
+    }
+    else if (pdev1->dev.iommu_group == NULL)
+    {
+        result = nv_pci_has_common_pci_switch(nv, peer);
+    }
+    else
+    {
+        result = NV_FALSE;
     }
 
-    if (pdev0->dev.iommu_group == pdev1->dev.iommu_group)
-        return NV_TRUE;
+    if (experimental && !nv->coherent)
+    {
+        nv_printf(
+            NV_DBG_INFO,
+            "NVRM: DMA-BUF GDR topology: "
+            "gpu=%04x:%02x:%02x.%u importer=%04x:%02x:%02x.%u "
+            "identityIommu=%u p2pDistance=%d barAddressable=%u "
+            "skipIommu=%u result=%u\n",
+            nv->pci_info.domain,
+            nv->pci_info.bus,
+            nv->pci_info.slot,
+            nv->pci_info.function,
+            pci_domain_nr(pdev1->bus),
+            pdev1->bus->number,
+            PCI_SLOT(pdev1->devfn),
+            PCI_FUNC(pdev1->devfn),
+            identity_iommu,
+            p2p_distance,
+            bar_addressable,
+            *skip_iommu,
+            result);
+    }
 
-    if (pdev1->dev.iommu_group == NULL)
-        return nv_pci_has_common_pci_switch(nv, peer);
-
-    return NV_FALSE;
+    return result;
 }
 
 NvBool nv_pci_has_common_pci_switch(

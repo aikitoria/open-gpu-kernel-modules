@@ -1044,8 +1044,11 @@ nv_dma_buf_attach(
 
     if (priv->mapping_type == NV_DMABUF_EXPORT_MAPPING_TYPE_FORCE_PCIE)
     {
+        NvBool skip_iommu;
+
         if(!nv_pci_is_valid_topology_for_direct_pci(priv->nv,
-                                                    to_pci_dev(attachment->dev)))
+                                                    to_pci_dev(attachment->dev),
+                                                    &skip_iommu))
         {
             nv_printf(NV_DBG_ERRORS,
                       "NVRM: dma-buf attach failed: "
@@ -1054,7 +1057,7 @@ nv_dma_buf_attach(
             goto unlock_priv;
         }
 
-        priv->skip_iommu = NV_TRUE;
+        priv->skip_iommu = skip_iommu;
     }
     else
     {
@@ -1123,8 +1126,10 @@ nv_dma_buf_map(
     }
 
     //
-    // For MAPPING_TYPE_FORCE_PCIE on coherent platforms,
-    // get the BAR1 PFN scatterlist instead of C2C pages.
+    // For MAPPING_TYPE_FORCE_PCIE, get the BAR1 PFN scatterlist instead of
+    // C2C pages. Stock coherent platforms bypass IOMMU mapping after their
+    // existing topology check. The experimental non-coherent path instead
+    // maps BAR1 through the importer's DMA API.
     //
     // If nv->coherent is true, that could mean two things:
     // 1. GPU memory has struct page from memory onlining(NUMA)

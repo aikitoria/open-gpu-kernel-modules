@@ -665,12 +665,23 @@ RmInitGpuInfoWithRmApi
 
     if (status == NV_OK)
     {
+        NvU32 experimental = 0;
+
         nvp->b_mobile_config_enabled =
             (pGpuInfoParams->gpuInfoList[0].data ==
              NV2080_CTRL_GPU_INFO_INDEX_MOBILE_CONFIG_ENABLED_YES);
         nv->dma_buf_supported =
             (pGpuInfoParams->gpuInfoList[1].data ==
              NV2080_CTRL_GPU_INFO_INDEX_DMABUF_CAPABILITY_YES);
+        nv->experimental_dmabuf_p2p_enabled = NV_FALSE;
+
+        (void)osReadRegistryDword(
+            pGpu,
+            NV_REG_STR_EXPERIMENTAL_DMABUF_P2P,
+            &experimental);
+
+        nv->experimental_dmabuf_p2p_enabled = (experimental != 0);
+
     }
 
     nv->coherent =

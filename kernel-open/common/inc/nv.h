@@ -584,6 +584,9 @@ typedef struct nv_state_t
     /* Bool to check if dma-buf is supported */
     NvBool dma_buf_supported;
 
+    /* Default-off non-coherent DMA-BUF GDR validation state from RM */
+    NvBool experimental_dmabuf_p2p_enabled;
+
     /* Bool to check if the device received a shutdown notification */
     NvBool is_shutdown;
 
