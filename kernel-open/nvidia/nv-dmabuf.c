@@ -572,7 +572,15 @@ nv_dma_buf_put_phys_addresses (
         return;
     }
 
-    if (!priv->static_phys_addrs)
+    //
+    // See the matching comment in nv_dma_buf_get_phys_addresses(): locking
+    // can be skipped only for MAPPING_TYPE_DEFAULT static phys addr configs.
+    // MAPPING_TYPE_FORCE_PCIE unmap still calls into kbusUnmapFbAperture_HAL(),
+    // which updates per-GPU RUSD statistics and is not safe to run
+    // concurrently without the GPU lock.
+    //
+    if (!priv->static_phys_addrs ||
+        (priv->mapping_type != NV_DMABUF_EXPORT_MAPPING_TYPE_DEFAULT))
     {
         status = rm_acquire_api_lock(sp);
         if (WARN_ON(status != NV_OK))
@@ -633,11 +641,18 @@ nv_dma_buf_get_phys_addresses (
     }
 
     //
-    // Locking is not needed for static phys address configs because the memdesc
-    // is not expected to change in this case and we hold the refcount on the
-    // owner GPU and memory before referencing it.
+    // Locking can be skipped for static phys address configs because the
+    // memdesc is not expected to change in this case and we hold the
+    // refcount on the owner GPU and memory before referencing it. This only
+    // holds for MAPPING_TYPE_DEFAULT: RM's static_phys_addrs determination
+    // also covers MAPPING_TYPE_FORCE_PCIE (any GPU with static BAR1
+    // enabled), but that mapping type does a real BAR1 aperture
+    // map/unmap and a per-GPU RUSD statistics update on every call
+    // (see kbusMapFbApertureSingle()/kbusUpdateRusdStatistics()), which
+    // are not safe to run concurrently without the GPU lock.
     //
-    if (!priv->static_phys_addrs)
+    if (!priv->static_phys_addrs ||
+        (priv->mapping_type != NV_DMABUF_EXPORT_MAPPING_TYPE_DEFAULT))
     {
         status = rm_acquire_api_lock(sp);
         if (status != NV_OK)
