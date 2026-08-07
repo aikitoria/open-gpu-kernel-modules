@@ -1130,6 +1130,10 @@
 #define NV_REG_STR_RM_PCIEP2P_TYPE_AUTO                     (0x00000002)
 #define NV_REG_STR_RM_PCIEP2P_TYPE_DEFAULT                  NV_REG_STR_RM_PCIEP2P_TYPE_MAILBOX
 
+// Experimental, default-off non-coherent DMA-BUF FORCE_PCIE validation path,
+// including a Linux-approved importer path in an identity IOMMU domain.
+#define NV_REG_STR_EXPERIMENTAL_DMABUF_P2P             "ExperimentalDmaBufP2P"
+
 //
 // Type: DWORD
 // Enables/Disables the WAR for bug 1630288 where we disable 3rd-party peer mappings

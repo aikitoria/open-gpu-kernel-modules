@@ -1015,6 +1015,27 @@
  #define NV_GPU_INIT_ON_PROBE NV_REG_STRING(__NV_GPU_INIT_ON_PROBE)
  #define NV_GPU_INIT_ON_PROBE_DEFAULT 0
 
+/*
+ * Option: NVreg_ExperimentalDmaBufP2P
+ *
+ * Description:
+ *
+ * Enables the capability-gated validation path for exporting framebuffer
+ * memory from non-coherent GPUs through DMA-BUF with FORCE_PCIE mappings. This
+ * option is experimental, defaults to disabled, and accepts importers only
+ * when Linux approves the complete P2PDMA path in an identity IOMMU domain and
+ * the importer's DMA mask covers BAR1. Coherent GPUs retain the stock path;
+ * other non-coherent topologies remain rejected.
+ *
+ * Possible values:
+ * 0 - Disable the experimental path (default)
+ * 1 - Enable the experimental non-coherent FORCE_PCIE path
+ */
+#define __NV_EXPERIMENTAL_DMABUF_P2P ExperimentalDmaBufP2P
+#define NV_REG_EXPERIMENTAL_DMABUF_P2P \
+    NV_REG_STRING(__NV_EXPERIMENTAL_DMABUF_P2P)
+#define NV_REG_EXPERIMENTAL_DMABUF_P2P_DEFAULT 0
+
 #if defined(NV_DEFINE_REGISTRY_KEY_TABLE)
 
 /*
@@ -1057,6 +1078,8 @@ NV_DEFINE_REG_ENTRY_GLOBAL(__NV_TEGRA_GPU_PG_MASK, 0);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_ENABLE_NONBLOCKING_OPEN, 1);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_EXCLUDE_ALL_GPUS, NV_EXCLUDE_ALL_GPUS_DEFAULT);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_GPU_INIT_ON_PROBE, NV_GPU_INIT_ON_PROBE_DEFAULT);
+NV_DEFINE_REG_ENTRY_GLOBAL(__NV_EXPERIMENTAL_DMABUF_P2P,
+                           NV_REG_EXPERIMENTAL_DMABUF_P2P_DEFAULT);
 
 NV_DEFINE_REG_STRING_ENTRY(__NV_COHERENT_GPU_MEMORY_MODE, NULL);
 NV_DEFINE_REG_STRING_ENTRY(__NV_REGISTRY_DWORDS, NULL);
@@ -1125,6 +1148,7 @@ nv_parm_t nv_parms[] = {
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_ENABLE_SYSTEM_MEMORY_POOLS),
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_OS_ENABLE_CXL_SUPPORT),
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_ENABLE_NON_PREEMTABLE_DEBUGGER_SESSION),
+    NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_EXPERIMENTAL_DMABUF_P2P),
     {NULL, NULL}
 };
 
