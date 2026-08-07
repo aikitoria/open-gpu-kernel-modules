@@ -36,6 +36,15 @@
      !(bar1Disabled) && !(migEnabled))
 
 /*
+ * The RmGpuDirectRdmaForceSPA hypervisor workaround is a coherent-platform
+ * address-translation override, not a DMA-BUF GDR capability requirement.
+ * It must stay unreachable for non-coherent GPUs regardless of whether the
+ * experimental non-coherent FORCE_PCIE path is permitted.
+ */
+#define DMABUF_GDR_USE_GRDMA_SPA(forcePcie, coherent, forceSpa) \
+    ((forcePcie) && (coherent) && (forceSpa))
+
+/*
  * Overflow-safe half-open range containment. Subtraction is performed only
  * after ordering checks, and size is compared against the remaining window.
  */

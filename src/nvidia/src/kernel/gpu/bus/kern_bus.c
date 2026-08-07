@@ -37,6 +37,7 @@
 #include "nvdevid.h"
 #include "containers/eheap_old.h"
 #include "gpu/bus/p2p_api.h"
+#include "dmabuf_gdr_policy.h"
 
 #include "gpu/gsp/gsp_static_config.h"
 #include "vgpu/rpc.h"
@@ -1312,8 +1313,24 @@ kbusGetGpuFbPhysAddressForRdma_IMPL
     NvU64     *pPhysAddr
 )
 {
-    if((bForcePcie) &&
-       (!pGpu->getProperty(pGpu, PDB_PROP_GPU_COHERENT_CPU_MAPPING)))
+    NvBool bCoherent = pGpu->getProperty(
+        pGpu, PDB_PROP_GPU_COHERENT_CPU_MAPPING);
+    NvU32 experimental = 0;
+    NvBool bExperimentalEnabled =
+        (osReadRegistryDword(
+             pGpu, NV_REG_STR_EXPERIMENTAL_DMABUF_P2P,
+             &experimental) == NV_OK) &&
+        (experimental != 0);
+    NvBool bExperimentalAllowed =
+        DMABUF_GDR_NONCOHERENT_ALLOWED(
+            bExperimentalEnabled,
+            bCoherent,
+            bForcePcie,
+            kbusIsStaticBar1Enabled(pGpu, pKernelBus),
+            pKernelBus->bBar1Disabled,
+            IS_MIG_ENABLED(pGpu));
+
+    if (bForcePcie && !bCoherent && !bExperimentalAllowed)
     {
         return NV_ERR_NOT_SUPPORTED;
     }
@@ -1323,7 +1340,11 @@ kbusGetGpuFbPhysAddressForRdma_IMPL
     // if the RmGpuDirectRdmaForceSPA regkey is set.
     // This is a stop-gap measure until hypervisor ensures GPA==SPA.
     //
-    if (bForcePcie && pKernelBus->bGrdmaForceSpa)
+    // bCoherent is required here: this is a coherent-platform hypervisor
+    // workaround, and must stay unreachable for non-coherent GPUs even when
+    // the experimental non-coherent DMA-BUF GDR path allows FORCE_PCIE.
+    //
+    if (DMABUF_GDR_USE_GRDMA_SPA(bForcePcie, bCoherent, pKernelBus->bGrdmaForceSpa))
     {
         *pPhysAddr = pKernelBus->grdmaBar1Spa;
     }
