@@ -385,8 +385,21 @@ kbusIsStaticBar1Supported_TU102
     //
     NvU64 fbSize            = pMemoryManager->Ram.fbAddrSpaceSizeMb << 20;
     NvU64 fbSizeAligned     = RM_ALIGN_UP(fbSize, RM_PAGE_SIZE_2M);
+    NvU64 clientFbSizeAligned =
+        RM_ALIGN_DOWN(memmgrGetClientFbAddrSpaceSize(pGpu, pMemoryManager),
+                      RM_PAGE_SIZE_2M);
     NvU64 bar1VASize        = pKernelBus->bar1[gfid].mappableLength;
     NvU64 bar1VASizeAligned = RM_ALIGN_DOWN(bar1VASize, RM_PAGE_SIZE_2M);
+    NvU64 staticBar1Offset  =
+        NV_ALIGN_UP(consoleSize + mailboxSize, RM_PAGE_SIZE_512M);
+    NvU64 maxStaticMapSize  =
+        (bar1VASizeAligned > staticBar1Offset) ?
+            bar1VASizeAligned - staticBar1Offset : 0;
+    NvBool bUseDisplayAwareStaticBar1 =
+        pKernelBus->getProperty(pKernelBus,
+            PDB_PROP_KBUS_SUPPORT_BAR1_P2P_BY_DEFAULT) &&
+        (clientFbSizeAligned != 0) &&
+        (maxStaticMapSize >= clientFbSizeAligned);
 
     if (gfid != 0)
     {
@@ -469,19 +482,15 @@ kbusIsStaticBar1Supported_TU102
                 //
                 NvU32 userdSize = 0;
                 NvU32 numChannels = kfifoGetMaxChannelsInSystem(pGpu, pKernelFifo);
-                NvU64 requiredAutoBar1Size = fbSizeAligned;
+                NvU64 requiredAutoBar1Size;
                 NvU64 mmioPrivSize = 16 * RM_PAGE_SIZE;
                 NvU64 doorbellSize = 16 * RM_PAGE_SIZE;
+                NvU64 dynamicBar1Size;
 
                 kfifoGetUserdSizeAlign_HAL(pKernelFifo, &userdSize, NULL);
 
                 userdSize *= numChannels;
-
-                requiredAutoBar1Size += userdSize;
-                requiredAutoBar1Size += mmioPrivSize;
-                requiredAutoBar1Size += doorbellSize;
-                requiredAutoBar1Size += consoleSize;
-                requiredAutoBar1Size += mailboxSize;
+                dynamicBar1Size = userdSize + mmioPrivSize + doorbellSize;
 
                 //
                 // Console mappings are already mapped from the bottom of the BAR1 VASpace,
@@ -493,7 +502,36 @@ kbusIsStaticBar1Supported_TU102
                 //
                 if ((consoleSize != 0) || (mailboxSize != 0))
                 {
-                    requiredAutoBar1Size += RM_PAGE_SIZE_512M - ((consoleSize + mailboxSize) % RM_PAGE_SIZE_512M);
+                    if (bUseDisplayAwareStaticBar1)
+                    {
+                        NvU64 alignmentPadding =
+                            staticBar1Offset - (consoleSize + mailboxSize);
+
+                        requiredAutoBar1Size =
+                            clientFbSizeAligned + staticBar1Offset;
+
+                        // Dynamic mappings can use the alignment gap before
+                        // the display-aware static mapping.
+                        if (dynamicBar1Size > alignmentPadding)
+                        {
+                            requiredAutoBar1Size +=
+                                dynamicBar1Size - alignmentPadding;
+                        }
+                    }
+                    else
+                    {
+                        requiredAutoBar1Size = fbSizeAligned + dynamicBar1Size +
+                            consoleSize + mailboxSize;
+                        requiredAutoBar1Size += RM_PAGE_SIZE_512M -
+                            ((consoleSize + mailboxSize) % RM_PAGE_SIZE_512M);
+                    }
+                }
+                else
+                {
+                    requiredAutoBar1Size =
+                        (bUseDisplayAwareStaticBar1 ? clientFbSizeAligned :
+                                                     fbSizeAligned) +
+                        dynamicBar1Size;
                 }
 
                 if (bar1VASizeAligned >= requiredAutoBar1Size)
