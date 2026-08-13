@@ -1,3 +1,248 @@
+# NVIDIA driver 610.57.04 with P2P for RTX 3090, RTX 4090, and RTX 5090
+
+This enables P2P on consumer GPUs with the 610.57.04 driver version. No kernel parameters
+are needed for the default behavior, just build, install, and go.
+
+See the [tinygrad 550.54.15-p2p README](https://github.com/tinygrad/open-gpu-kernel-modules/blob/550.54.15-p2p/README.md)
+for the original description of the approach.
+
+## Supported configurations
+
+| GPU      | P2P path                                                               |
+| -------- | ---------------------------------------------------------------------- |
+| RTX 3090 | Pairwise NVLink where available, PCIe BAR1 otherwise                   |
+| RTX 4090 | PCIe BAR1                                                              |
+| RTX 5090 | PCIe BAR1                                                              |
+
+P2P also works between different devices of the same generation, for example RTX 5090
+to RTX PRO 6000 Blackwell.
+
+## How it works
+
+This enables BAR1 P2P on consumer GPUs where NVLink isn't available, and falls back to
+NVLink where it is. For PCIe pairs, transfers write directly to the other GPU's physical
+address over DMA.
+
+> [!WARNING]
+> IOMMU must be in passthrough mode (`iommu=pt`), not translating, or DMA will go through
+> IOMMU page tables and transfers will fail. This is very dangerous if you run untrusted
+> software or devices.
+
+## How to use
+
+1. Enable DMA passthrough mode for the IOMMU:
+   - Edit `/etc/default/grub`
+   - Add `amd_iommu=on iommu=pt` to `GRUB_CMDLINE_LINUX_DEFAULT` (use `intel_iommu=on iommu=pt` on Intel)
+   - Run `sudo update-grub`
+2. Install the [NVIDIA 610.57.04 driver](https://www.nvidia.com/en-us/drivers/details/274513/)
+3. Run `./install.sh` in this repo
+4. Reboot the server
+
+## Forcing 3090s to use PCIe instead of NVLink
+
+For testing, you can make 3090 pairs fall back to PCIe BAR1 even when NVLink is present by
+passing `NVreg_RegistryDwords="RMForceP2PType=1"` to the nvidia module. Add this to
+`/etc/modprobe.d/nvidia.conf`:
+
+```
+options nvidia NVreg_RegistryDwords="RMForceP2PType=1"
+```
+
+## Experimental: faster cudaHostRegister for hugepage-backed memory
+
+This branch also includes an experimental path that accelerates `cudaHostRegister` by
+several orders of magnitude when the registered buffer is backed by 1G hugepages, and
+shrinks the device page tables used for such mappings. It is enabled automatically. This
+path skips some of the per-4K-page bookkeeping the stock driver performs, so it may
+misbehave in edge cases the stock driver handles correctly.
+
+## Potential issues
+
+If P2P transfers are slow, make sure your IOMMU is in passthrough (`pt`) mode and that ACS
+is disabled. ACS on root ports forces all GPU-to-GPU traffic through the CPU root complex,
+killing P2P bandwidth. ACS can be disabled in BIOS, with the
+`pcie_acs_override=downstream,multifunction` kernel parameter (if your kernel supports it),
+or with an ACS override patch applied to the kernel.
+
+## Sample `p2pBandwidthLatencyTest` output
+
+9-GPU system (1x RTX PRO 6000 Blackwell + 8x RTX 5090) on a dual-socket AMD EPYC 9575F (Turin) host:
+
+```
+./p2pBandwidthLatencyTest
+```
+
+```
+[P2P (Peer-to-Peer) GPU Bandwidth Latency Test]
+Device: 0, NVIDIA RTX PRO 6000 Blackwell Workstation Edition, pciBusID: c1, pciDeviceID: 0, pciDomainID:0
+Device: 1, NVIDIA GeForce RTX 5090, pciBusID: 1, pciDeviceID: 0, pciDomainID:0
+Device: 2, NVIDIA GeForce RTX 5090, pciBusID: 11, pciDeviceID: 0, pciDomainID:0
+Device: 3, NVIDIA GeForce RTX 5090, pciBusID: 61, pciDeviceID: 0, pciDomainID:0
+Device: 4, NVIDIA GeForce RTX 5090, pciBusID: 71, pciDeviceID: 0, pciDomainID:0
+Device: 5, NVIDIA GeForce RTX 5090, pciBusID: 81, pciDeviceID: 0, pciDomainID:0
+Device: 6, NVIDIA GeForce RTX 5090, pciBusID: 91, pciDeviceID: 0, pciDomainID:0
+Device: 7, NVIDIA GeForce RTX 5090, pciBusID: e1, pciDeviceID: 0, pciDomainID:0
+Device: 8, NVIDIA GeForce RTX 5090, pciBusID: f1, pciDeviceID: 0, pciDomainID:0
+
+***NOTE: In case a device doesn't have P2P access to other one, it falls back to normal memcopy procedure.
+So you can see lesser Bandwidth (GB/s) and unstable Latency (us) in those cases.
+
+P2P Connectivity Matrix
+     D\D     0     1     2     3     4     5     6     7     8
+     0	     1     1     1     1     1     1     1     1     1
+     1	     1     1     1     1     1     1     1     1     1
+     2	     1     1     1     1     1     1     1     1     1
+     3	     1     1     1     1     1     1     1     1     1
+     4	     1     1     1     1     1     1     1     1     1
+     5	     1     1     1     1     1     1     1     1     1
+     6	     1     1     1     1     1     1     1     1     1
+     7	     1     1     1     1     1     1     1     1     1
+     8	     1     1     1     1     1     1     1     1     1
+Unidirectional P2P=Disabled Bandwidth Matrix (GB/s)
+   D\D     0      1      2      3      4      5      6      7      8 
+     0 1611.24  43.30  42.82  42.88  42.89  43.69  43.61  43.63  43.74 
+     1  43.38 1658.76  42.71  42.69  42.83  43.34  43.47  43.33  43.50 
+     2  43.53  42.82 1664.06  42.71  42.74  43.19  43.31  43.24  43.34 
+     3  43.51  42.91  42.80 1660.58  42.77  43.20  43.27  43.17  43.36 
+     4  43.47  43.00  42.83  42.82 1664.06  43.43  43.32  43.32  43.49 
+     5  43.81  42.95  42.84  42.84  42.94 1665.83  43.52  43.45  43.48 
+     6  43.76  43.04  42.93  42.99  43.01  43.85 1662.29  43.66  43.74 
+     7  43.77  42.95  42.90  43.10  43.00  43.85  43.77 1662.29  43.74 
+     8  43.84  43.08  43.04  43.03  43.25  43.91  43.87  43.89 1658.70 
+Unidirectional P2P=Enabled Bandwidth (P2P Writes) Matrix (GB/s)
+   D\D     0      1      2      3      4      5      6      7      8 
+     0 1617.49  55.59  55.62  55.64  55.64  56.58  56.58  56.58  56.58 
+     1  55.60 1656.95  56.57  56.55  56.57  55.63  55.63  55.62  55.64 
+     2  55.63  56.55 1660.47  56.55  56.57  55.62  55.62  55.63  55.61 
+     3  55.63  56.58  56.55 1658.70  56.55  55.63  55.63  55.59  55.63 
+     4  55.63  56.55  56.58  56.58 1656.95  55.62  55.61  55.61  55.64 
+     5  56.57  55.62  55.62  55.64  55.64 1662.23  56.55  56.58  56.58 
+     6  56.50  55.62  55.62  55.61  55.64  56.58 1662.23  56.58  56.58 
+     7  56.58  55.62  55.62  55.64  55.65  56.58  56.58 1665.78  56.57 
+     8  56.55  55.62  55.62  55.64  55.63  56.58  56.55  56.58 1662.23 
+Bidirectional P2P=Disabled Bandwidth Matrix (GB/s)
+   D\D     0      1      2      3      4      5      6      7      8 
+     0 1600.87  56.70  56.88  57.10  56.47  57.06  56.93  57.22  57.30 
+     1  57.17 1642.93  56.50  56.74  56.48  57.19  56.77  56.87  56.75 
+     2  56.87  56.90 1645.55  56.69  56.67  56.93  57.00  56.76  56.83 
+     3  56.95  56.85  56.50 1640.37  56.66  56.78  56.98  57.48  57.40 
+     4  56.50  56.25  56.58  56.61 1644.68  57.09  57.05  56.91  57.09 
+     5  57.31  56.94  56.67  56.83  56.78 1642.06  57.21  57.17  57.47 
+     6  56.85  56.95  56.87  56.99  56.64  57.29 1642.09  57.09  57.02 
+     7  57.15  57.05  56.85  56.54  56.95  56.71  57.20 1646.42  56.96 
+     8  57.00  56.73  57.09  56.82  56.49  57.08  56.90  57.06 1642.95 
+Bidirectional P2P=Enabled Bandwidth Matrix (GB/s)
+   D\D     0      1      2      3      4      5      6      7      8 
+     0 1600.87 111.17 111.04 111.14 111.12 111.35 111.34 111.39 111.38 
+     1 111.12 1636.90 111.38 111.39 111.34 111.10 111.08 111.11 111.08 
+     2 111.08 111.38 1639.51 111.41 111.38 111.08 110.95 111.13 110.98 
+     3 111.13 111.40 111.39 1641.23 111.39 111.12 111.15 110.83 111.09 
+     4 111.13 111.40 111.34 111.40 1642.95 111.07 111.12 111.15 111.11 
+     5 111.35 111.13 111.11 111.15 110.97 1640.34 111.45 111.39 111.43 
+     6 111.45 111.01 111.09 111.14 111.17 111.39 1642.95 111.39 111.45 
+     7 111.45 111.11 111.18 111.12 111.17 111.40 111.40 1640.37 111.40 
+     8 111.34 111.19 111.10 111.04 111.17 111.39 111.40 111.39 1637.76 
+P2P=Disabled Latency Matrix (us)
+   GPU     0      1      2      3      4      5      6      7      8 
+     0   1.04  14.31  14.22  14.35  14.30  14.05  14.22   7.98  14.35 
+     1  14.44   0.98  14.31  14.31  14.31  14.32  14.30  14.32  14.34 
+     2  14.32  14.31   0.98  14.32  14.31  14.30  14.31  14.32  14.35 
+     3  14.32  14.32  14.32   1.01  14.32  14.31  14.32  14.32  14.32 
+     4  14.33  14.31  14.32  14.30   0.97  14.30  14.32  14.31  14.33 
+     5  14.33  14.24  14.31  14.16  14.15   0.95  14.32  14.32  14.31 
+     6  12.61  14.06  14.32  14.32  14.33  14.33   0.98  14.32  14.32 
+     7  14.33  14.33  14.30  14.32  14.26  14.33  14.24   0.92  12.56 
+     8  12.51  14.32  14.22  14.31  14.32  14.25  14.33  14.31   0.96 
+
+   CPU     0      1      2      3      4      5      6      7      8 
+     0   1.76   5.83   6.08   5.98   5.66   4.93   5.29   5.23   4.88 
+     1   5.48   1.87   6.36   6.34   6.04   5.30   5.60   5.58   5.26 
+     2   5.70   6.24   2.01   6.56   6.26   5.48   5.87   5.83   5.46 
+     3   5.64   6.27   6.54   2.00   6.24   5.52   5.83   5.79   5.45 
+     4   5.46   6.03   6.34   6.31   1.89   5.31   5.62   5.59   5.24 
+     5   4.93   5.50   5.84   5.83   5.48   1.62   5.12   5.08   4.76 
+     6   5.15   5.71   6.04   6.04   5.74   4.98   1.75   5.34   4.97 
+     7   5.11   5.73   5.99   5.99   5.71   5.02   5.32   1.73   4.97 
+     8   4.93   5.47   5.78   5.80   5.48   4.74   5.05   5.05   1.63 
+P2P=Enabled Latency (P2P Writes) Matrix (us)
+   GPU     0      1      2      3      4      5      6      7      8 
+     0   1.02   0.38   0.42   0.36   0.37   0.37   0.44   0.36   0.36 
+     1   0.45   0.98   0.37   0.44   0.38   0.43   0.45   0.45   0.39 
+     2   0.37   0.38   0.96   0.36   0.38   0.37   0.38   0.38   0.38 
+     3   0.44   0.44   0.43   1.01   0.38   0.37   0.45   0.38   0.44 
+     4   0.43   0.36   0.37   0.37   0.95   0.35   0.38   0.44   0.44 
+     5   0.37   0.36   0.36   0.36   0.35   0.95   0.36   0.36   0.36 
+     6   0.36   0.43   0.43   0.36   0.43   0.36   0.98   0.43   0.36 
+     7   0.37   0.35   0.36   0.35   0.36   0.36   0.43   0.92   0.43 
+     8   0.38   0.44   0.36   0.44   0.37   0.38   0.37   0.37   0.96 
+
+   CPU     0      1      2      3      4      5      6      7      8 
+     0   1.75   1.34   1.31   1.31   1.31   1.32   1.36   1.32   1.31 
+     1   1.52   1.88   1.49   1.53   1.52   1.53   1.52   1.58   1.52 
+     2   1.67   1.64   2.04   1.64   1.64   1.65   1.65   1.64   1.66 
+     3   1.66   1.63   1.63   2.00   1.64   1.63   1.64   1.63   1.63 
+     4   1.55   1.53   1.53   1.53   1.93   1.53   1.54   1.53   1.53 
+     5   1.32   1.31   1.30   1.30   1.31   1.68   1.30   1.31   1.30 
+     6   1.42   1.39   1.40   1.41   1.41   1.41   1.77   1.41   1.41 
+     7   1.42   1.39   1.45   1.39   1.39   1.40   1.40   1.74   1.40 
+     8   1.33   1.28   1.29   1.32   1.30   1.29   1.29   1.30   1.66 
+```
+
+## Sample `nccl-tests` `all_reduce_perf` output
+
+8x RTX 5090 on the same host:
+
+```
+CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7,8 NCCL_P2P_LEVEL=SYS ./build/all_reduce_perf -b 8 -e 128M -f 2 -g 8
+```
+
+```
+# nccl-tests version 2.18.2 nccl-headers=22907 nccl-library=22907
+# Collective test starting: all_reduce_perf
+# nThread 1 nGpus 8 minBytes 8 maxBytes 134217728 step: 2(factor) warmup iters: 1 iters: 20 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid  27238 on      crazy device  0 [0000:01:00] NVIDIA GeForce RTX 5090
+#  Rank  1 Group  0 Pid  27238 on      crazy device  1 [0000:11:00] NVIDIA GeForce RTX 5090
+#  Rank  2 Group  0 Pid  27238 on      crazy device  2 [0000:61:00] NVIDIA GeForce RTX 5090
+#  Rank  3 Group  0 Pid  27238 on      crazy device  3 [0000:71:00] NVIDIA GeForce RTX 5090
+#  Rank  4 Group  0 Pid  27238 on      crazy device  4 [0000:81:00] NVIDIA GeForce RTX 5090
+#  Rank  5 Group  0 Pid  27238 on      crazy device  5 [0000:91:00] NVIDIA GeForce RTX 5090
+#  Rank  6 Group  0 Pid  27238 on      crazy device  6 [0000:e1:00] NVIDIA GeForce RTX 5090
+#  Rank  7 Group  0 Pid  27238 on      crazy device  7 [0000:f1:00] NVIDIA GeForce RTX 5090
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+           8             2     float     sum      -1    25.47    0.00    0.00       0    24.82    0.00    0.00       0
+          16             4     float     sum      -1    24.52    0.00    0.00       0    24.60    0.00    0.00       0
+          32             8     float     sum      -1    24.65    0.00    0.00       0    24.70    0.00    0.00       0
+          64            16     float     sum      -1    24.72    0.00    0.00       0    24.78    0.00    0.00       0
+         128            32     float     sum      -1    24.67    0.01    0.01       0    24.79    0.01    0.01       0
+         256            64     float     sum      -1    24.77    0.01    0.02       0    24.56    0.01    0.02       0
+         512           128     float     sum      -1    24.62    0.02    0.04       0    24.62    0.02    0.04       0
+        1024           256     float     sum      -1    24.66    0.04    0.07       0    24.65    0.04    0.07       0
+        2048           512     float     sum      -1    24.54    0.08    0.15       0    24.66    0.08    0.15       0
+        4096          1024     float     sum      -1    36.29    0.11    0.20       0    35.21    0.12    0.20       0
+        8192          2048     float     sum      -1    37.00    0.22    0.39       0    36.06    0.23    0.40       0
+       16384          4096     float     sum      -1    38.06    0.43    0.75       0    37.14    0.44    0.77       0
+       32768          8192     float     sum      -1    39.33    0.83    1.46       0    38.42    0.85    1.49       0
+       65536         16384     float     sum      -1    40.96    1.60    2.80       0    40.07    1.64    2.86       0
+      131072         32768     float     sum      -1    42.19    3.11    5.44       0    41.28    3.18    5.56       0
+      262144         65536     float     sum      -1    45.87    5.71   10.00       0    45.00    5.83   10.19       0
+      524288        131072     float     sum      -1    56.96    9.20   16.11       0    57.42    9.13   15.98       0
+     1048576        262144     float     sum      -1    74.74   14.03   24.55       0    72.38   14.49   25.35       0
+     2097152        524288     float     sum      -1   104.50   20.07   35.12       0   107.73   19.47   34.07       0
+     4194304       1048576     float     sum      -1   176.93   23.71   41.48       0   178.56   23.49   41.11       0
+     8388608       2097152     float     sum      -1   326.13   25.72   45.01       0   336.41   24.94   43.64       0
+    16777216       4194304     float     sum      -1   646.48   25.95   45.42       0   647.96   25.89   45.31       0
+    33554432       8388608     float     sum      -1  1284.81   26.12   45.70       0  1286.28   26.09   45.65       0
+    67108864      16777216     float     sum      -1  2585.56   25.96   45.42       0  2583.09   25.98   45.47       0
+   134217728      33554432     float     sum      -1  5355.16   25.06   43.86       0  5329.43   25.18   44.07       0
+```
+
+---
+
 # NVIDIA Linux Open GPU Kernel Module Source
 
 This is the source release of the NVIDIA Linux open GPU kernel modules,
