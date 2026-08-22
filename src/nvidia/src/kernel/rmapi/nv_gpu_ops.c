@@ -3241,15 +3241,29 @@ static NV_STATUS getNvlinkP2PCaps(struct gpuDevice *device1,
 }
 
 // TODO: Bug 3264814: [HOPPER][RM] Support Bar1 P2P PCIE Atomics
-// The logic here should consider bus topology and routing between
-// the two GPUs.
+// The logic here should consider bus topology and routing between the two
+// GPUs. Mixed-architecture BAR1 mappings must remain non-coherent until that
+// routing and the atomic protocol compatibility have been validated.
 NvBool _nvGpuOpsIsBar1P2pAtomicEnabled(struct gpuSession *session, OBJGPU *pMappingGpu, OBJGPU *pOwningGpu)
 {
-    NvU32 arch;
-    NV_STATUS status = _nvGpuOpsGetDeviceArchByGpuId(session, pOwningGpu->gpuId, &arch);
+    NvU32 mappingArch;
+    NvU32 owningArch;
+    NV_STATUS status = _nvGpuOpsGetDeviceArchByGpuId(session, pOwningGpu->gpuId, &owningArch);
 
     NV_ASSERT_OR_RETURN(status == NV_OK, 0);
-    return arch >= GPU_ARCHITECTURE_BLACKWELL_GB1XX;
+
+    if (pMappingGpu != NULL)
+    {
+        status = _nvGpuOpsGetDeviceArchByGpuId(session, pMappingGpu->gpuId, &mappingArch);
+        NV_ASSERT_OR_RETURN(status == NV_OK, 0);
+
+        if (mappingArch != owningArch)
+        {
+            return NV_FALSE;
+        }
+    }
+
+    return owningArch >= GPU_ARCHITECTURE_BLACKWELL_GB1XX;
 }
 
 NV_STATUS nvGpuOpsGetP2PCaps(struct gpuDevice *device1,
@@ -3667,6 +3681,7 @@ done:
 }
 
 static GMMU_APERTURE nvGpuOpsGetExternalAllocAperture(struct gpuSession *session,
+                                                      OBJGPU *pMappingGpu,
                                                       PMEMORY_DESCRIPTOR pMemDesc,
                                                       NvBool isIndirectPeerSupported,
                                                       NvBool isPeerSupported,
@@ -3684,7 +3699,7 @@ static GMMU_APERTURE nvGpuOpsGetExternalAllocAperture(struct gpuSession *session
 
         if (isBar1P2PSupported)
         {
-            if (_nvGpuOpsIsBar1P2pAtomicEnabled(session, NULL, pMemDesc->pGpu))
+            if (_nvGpuOpsIsBar1P2pAtomicEnabled(session, pMappingGpu, pMemDesc->pGpu))
             {
                 return GMMU_APERTURE_SYS_COH;
             }
@@ -4101,6 +4116,7 @@ nvGpuOpsBuildExternalAllocPtes
         memdescSetPteKindForGpu(pMemDesc, pMappingGpu, oldKind);
 
     aperture = nvGpuOpsGetExternalAllocAperture(session,
+                                                pMappingGpu,
                                                 pMemDesc,
                                                 isIndirectPeerSupported,
                                                 isPeerSupported,
@@ -4525,6 +4541,7 @@ nvGpuOpsBuildExternalAllocPhysAddrs
         return NV_ERR_INVALID_ARGUMENT;
 
     aperture = nvGpuOpsGetExternalAllocAperture(session,
+                                                pMappingGpu,
                                                 pMemDesc,
                                                 isIndirectPeerSupported,
                                                 isPeerSupported,
@@ -8119,6 +8136,7 @@ static NV_STATUS nvGpuOpsFillGpuMemoryInfo(PMEMORY_DESCRIPTOR pMemDesc,
     if (pGpuMemoryInfo->contig)
     {
         GMMU_APERTURE aperture = nvGpuOpsGetExternalAllocAperture(NULL,
+                                                                  pMappingGpu,
                                                                   pMemDesc,
                                                                   NV_FALSE,
                                                                   NV_FALSE,
