@@ -1,27 +1,40 @@
 # NVIDIA driver 610.57.04 with P2P for RTX 3090, RTX 4090, and RTX 5090
 
-This enables P2P on consumer GPUs with the 610.57.04 driver version. No kernel parameters
-are needed for the default behavior, just build, install, and go.
+This enables NVLink and PCIe BAR1 P2P on consumer GPUs with the 610.57.04 driver,
+including mixed-generation pairs such as RTX 3090 to RTX 5090. No NVIDIA module
+parameter is needed for the default behavior, but PCIe BAR1 P2P requires Resizable BAR
+and an IOMMU configured for passthrough.
 
 See the [tinygrad 550.54.15-p2p README](https://github.com/tinygrad/open-gpu-kernel-modules/blob/550.54.15-p2p/README.md)
 for the original description of the approach.
 
 ## Supported configurations
 
-| GPU      | P2P path                                                               |
-| -------- | ---------------------------------------------------------------------- |
-| RTX 3090 | Pairwise NVLink where available, PCIe BAR1 otherwise                   |
-| RTX 4090 | PCIe BAR1                                                              |
-| RTX 5090 | PCIe BAR1                                                              |
+| GPUs                      | P2P path                                     |
+| ------------------------- | -------------------------------------------- |
+| RTX 3090 pair             | NVLink where available, PCIe BAR1 otherwise |
+| RTX 4090 or RTX 5090 pair | PCIe BAR1                                    |
+| Mixed-generation pair     | PCIe BAR1 + `libcuda` patch                  |
 
-P2P also works between different devices of the same generation, for example RTX 5090
-to RTX PRO 6000 Blackwell.
+Same-generation devices need only the patched kernel modules. Mixed-generation CUDA
+P2P also needs the user-space patch described below. Different devices from the same
+generation work, for example RTX 5090 to RTX PRO 6000 Blackwell.
+
+PCIe BAR1 P2P requires a sufficiently large BAR1 aperture on every participating GPU.
+Consumer Turing GPUs do not provide the required Resizable BAR support and are not
+supported by this path.
 
 ## How it works
 
-This enables BAR1 P2P on consumer GPUs where NVLink isn't available, and falls back to
+This enables BAR1 P2P on consumer GPUs where NVLink is not available, while retaining
 NVLink where it is. For PCIe pairs, transfers write directly to the other GPU's physical
 address over DMA.
+
+The mixed-generation changes treat BAR1 as independent from NVIDIA's
+architecture-specific proprietary PCIe mailbox protocol, enable dynamic BAR1 peer
+mappings on Ampere and Ada, and track those mappings so they can be freed correctly.
+Mixed-architecture mappings are kept non-coherent; BAR1 atomics are not advertised for
+them.
 
 > [!WARNING]
 > IOMMU must be in passthrough mode (`iommu=pt`), not translating, or DMA will go through
@@ -30,13 +43,26 @@ address over DMA.
 
 ## How to use
 
-1. Enable DMA passthrough mode for the IOMMU:
+1. Enable Above 4G Decoding and Resizable BAR in system firmware.
+2. Enable DMA passthrough mode for the IOMMU:
    - Edit `/etc/default/grub`
    - Add `amd_iommu=on iommu=pt` to `GRUB_CMDLINE_LINUX_DEFAULT` (use `intel_iommu=on iommu=pt` on Intel)
    - Run `sudo update-grub`
-2. Install the [NVIDIA 610.57.04 driver](https://www.nvidia.com/en-us/drivers/details/274513/)
-3. Run `./install.sh` in this repo
-4. Reboot the server
+3. Install the [NVIDIA 610.57.04 driver](https://www.nvidia.com/en-us/drivers/details/274513/).
+4. Run `./install.sh` in this repo.
+5. For mixed-generation P2P, back up and patch the system `libcuda` as described below.
+6. Reboot the server.
+
+## Mixed-generation `libcuda` patch
+
+The proprietary `libcuda` also blocks mixed-generation P2P. Set the correct path
+for your installation, back it up, and run [`patch-libcuda-p2p.py`](patch-libcuda-p2p.py):
+
+```
+LIBCUDA=/usr/lib/x86_64-linux-gnu/libcuda.so.1
+sudo cp "$LIBCUDA" "$LIBCUDA.bak"
+sudo ./patch-libcuda-p2p.py "$LIBCUDA"
+```
 
 ## Forcing 3090s to use PCIe instead of NVLink
 
