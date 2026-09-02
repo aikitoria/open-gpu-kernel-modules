@@ -911,6 +911,16 @@
 
 //
 // TYPE DWORD
+// Trims the top of the usable FB by the given number of MiB so boards where
+// BAR1 size equals VRAM size can satisfy the static BAR1 P2P requirement
+// (BAR1 >= clientFB + 512 MiB console/mailbox alignment floor).
+//
+#define NV_REG_STR_RM_P2P_FB_TAIL_RESERVE_MB                  "RMP2PFbTailReserveMb"
+#define NV_REG_STR_RM_P2P_FB_TAIL_RESERVE_MB_DISABLED         0x0
+#define NV_REG_STR_RM_P2P_FB_TAIL_RESERVE_MB_ADAPTIVE         0x1
+
+//
+// TYPE DWORD
 // This regkey overrides the max context size (used to determine the reserved memory size) to a user-specified value.
 // Exposed to clients for bug 5201785. For internal use only.
 // The value must be greater than 0 and less than the calculated max context size for the regkey to take effect.    .

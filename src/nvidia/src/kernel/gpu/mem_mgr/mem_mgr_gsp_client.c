@@ -29,7 +29,193 @@
 #include "gpu/gsp/gsp_static_config.h"
 #include <ctrl/ctrl2080/ctrl2080fb.h>
 #include "gpu/mem_mgr/fermi_dma.h"
+#include "gpu/mem_mgr/rm_page_size.h"
+#include "nvrm_registry.h"
 #include "nvoc/prelude.h"
+
+/*!
+ * @brief Size BAR1 directly via PCI config space (write-ones probe), because
+ *        KernelBus->pciBarSizes[] is not populated yet when the GSP FB region
+ *        table is parsed. Uses the same osPci* accessors as kern_gpu_gb202.c,
+ *        but does not cache the handle in pGpu->hPci.
+ */
+static NvU64
+_p2pPciBar1Size
+(
+    OBJGPU *pGpu
+)
+{
+    void *h = pGpu->hPci;
+    NvU32 cmd, lo, hi, slo, shi;
+    NvU64 size;
+    NvBool bBar1Is64;
+
+    if (h == NULL)
+    {
+        h = osPciInitHandle(gpuGetDomain(pGpu), gpuGetBus(pGpu),
+                            gpuGetDevice(pGpu), 0 /* function */, NULL, NULL);
+    }
+    if (h == NULL)
+        return 0;
+
+    lo = osPciReadDword(h, 0x14);
+    bBar1Is64 = ((lo & 0x4) != 0);
+    hi = bBar1Is64 ? osPciReadDword(h, 0x18) : 0;
+
+    cmd = osPciReadDword(h, 0x04);
+
+    // Temporarily disable memory space decoding while sizing the BAR.
+    osPciWriteDword(h, 0x04, cmd & ~0x2);
+
+    osPciWriteDword(h, 0x14, 0xFFFFFFFF);
+    if (bBar1Is64)
+        osPciWriteDword(h, 0x18, 0xFFFFFFFF);
+    slo = osPciReadDword(h, 0x14) & ~0xFu;
+    shi = bBar1Is64 ? osPciReadDword(h, 0x18) : 0;
+
+    osPciWriteDword(h, 0x14, lo);
+    if (bBar1Is64)
+        osPciWriteDword(h, 0x18, hi);
+
+    osPciWriteDword(h, 0x04, cmd);
+
+    if ((slo == 0) && (shi == 0))
+        return 0;
+
+    size = ~(((NvU64)shi << 32) | (NvU64)slo) + 1;
+    return (size == 0) ? 0 : size;
+}
+
+//
+// Registry key RMP2PFbTailReserveMb (see nvrm_registry.h):
+//   0 (default) - disabled, no trim
+//   1           - adaptive per-GPU trim (exactly the static BAR1 shortfall)
+//   N (>1)      - fixed trim of N MiB
+//
+#define P2P_FB_TAIL_RESERVE_MARGIN_BYTES (16ULL << 20)
+
+/*!
+ * @brief Trim the top of the usable FB by a registry-controlled amount so
+ *        boards whose BAR1 size equals their VRAM size can satisfy the
+ *        static BAR1 P2P requirement.
+ *
+ *        The static BAR1 requirement (BAR1 >= clientFB + 512 MiB alignment
+ *        floor for the console/mailbox area) misses by only a few MiB when
+ *        BAR1 == VRAM (e.g. 16 GiB / 16 GiB), so BAR1 P2P can never be
+ *        enabled on such boards. Trimming the top of the usable FB by the
+ *        shortfall makes the requirement fit, at the cost of that much
+ *        usable VRAM (per GPU).
+ *
+ *        The trim folds the top of the topmost usable region into the
+ *        reserved region directly above it (the GSP layout always reserves
+ *        the top of the FB), so the heap/PMA can never allocate it. A usable
+ *        region on top of the FB is left untrimmed (with a warning), since
+ *        shrinking the top region would understate fbAddrSpaceSizeMb.
+ */
+static void
+_p2pApplyFbTailReserve
+(
+    OBJGPU        *pGpu,
+    MemoryManager *pMemoryManager,
+    NvU32          numFBRegions
+)
+{
+    NvU32  tailReserveMb = 0;
+    NvU32  last          = numFBRegions - 1;
+    NvU32  u;
+    NvU64  trimBytes     = 0;
+    NvU64  bar1Size;
+    NvBool bTrimmed      = NV_FALSE;
+
+    if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_P2P_FB_TAIL_RESERVE_MB, &tailReserveMb) != NV_OK) ||
+        (tailReserveMb == NV_REG_STR_RM_P2P_FB_TAIL_RESERVE_MB_DISABLED))
+    {
+        return;
+    }
+
+    if (tailReserveMb == NV_REG_STR_RM_P2P_FB_TAIL_RESERVE_MB_ADAPTIVE)
+    {
+        //
+        // Adaptive: trim exactly what static BAR1 needs on this GPU,
+        // assuming the worst case 512 MiB console/mailbox alignment floor
+        // (so the GPU stays P2P-capable even if it later drives a display),
+        // plus margin for the BAR1-mappable length being slightly below the
+        // PCI BAR size. GPUs that already fit are not trimmed at all.
+        //
+        bar1Size = _p2pPciBar1Size(pGpu);
+        if (bar1Size == 0)
+        {
+            KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
+
+            bar1Size = (pKernelBus != NULL) ? kbusGetPciBarSize(pKernelBus, 1) : 0;
+        }
+
+        if (bar1Size == 0)
+        {
+            NV_PRINTF(LEVEL_WARNING,
+                      "P2P FB tail reserve: BAR1 size unknown, skipping adaptive trim\n");
+            return;
+        }
+
+        NvU64 bar1Usable = RM_ALIGN_DOWN(bar1Size, RM_PAGE_SIZE_2M);
+        NvU64 required   = pMemoryManager->Ram.fbUsableMemSize + RM_PAGE_SIZE_512M;
+
+        if (required > bar1Usable)
+        {
+            trimBytes = RM_ALIGN_UP(required + P2P_FB_TAIL_RESERVE_MARGIN_BYTES - bar1Usable,
+                                    RM_PAGE_SIZE_2M);
+        }
+    }
+    else
+    {
+        trimBytes = (NvU64)tailReserveMb << 20;
+    }
+
+    if ((trimBytes == 0) || (last < 1))
+    {
+        return;
+    }
+
+    //
+    // Fold the trim into the reserved region on top of the FB: find the
+    // topmost usable region below the reserved region(s) at the top (the GSP
+    // layout always reserves the top of the FB), trim that region's limit,
+    // and extend the reserved region directly above it downward, keeping the
+    // region chain contiguous. A usable region on top of the FB is left
+    // untrimmed, since shrinking the top region would understate
+    // fbAddrSpaceSizeMb, which is derived from the top region's limit below.
+    //
+    if (pMemoryManager->Ram.fbRegion[last].bRsvdRegion)
+    {
+        u = last;
+        while ((u != 0) && pMemoryManager->Ram.fbRegion[u].bRsvdRegion)
+        {
+            u--;
+        }
+
+        if (!pMemoryManager->Ram.fbRegion[u].bRsvdRegion &&
+            pMemoryManager->Ram.fbRegion[u + 1].bRsvdRegion &&
+            (pMemoryManager->Ram.fbRegion[u + 1].base ==
+                pMemoryManager->Ram.fbRegion[u].limit + 1) &&
+            (pMemoryManager->Ram.fbRegion[u].limit -
+             pMemoryManager->Ram.fbRegion[u].base + 1) > trimBytes)
+        {
+            pMemoryManager->Ram.fbRegion[u].limit       -= trimBytes;
+            pMemoryManager->Ram.fbRegion[u + 1].base    -= trimBytes;
+            pMemoryManager->Ram.fbRegion[u + 1].rsvdSize += trimBytes;
+            pMemoryManager->Ram.fbUsableMemSize         -= trimBytes;
+            pMemoryManager->Ram.reservedMemSize         += trimBytes;
+            bTrimmed = NV_TRUE;
+        }
+    }
+
+    if (!bTrimmed)
+    {
+        NV_PRINTF(LEVEL_WARNING,
+                  "P2P FB tail reserve: no trimmable usable region found below the reserved top, skipping 0x%llx byte trim\n",
+                  trimBytes);
+    }
+}
 
 /*!
  * @brief Initialize FB regions from static info obtained from GSP FW. Also,
@@ -106,6 +292,13 @@ memmgrInitBaseFbRegions_FWCLIENT
         }
     }
     pMemoryManager->Ram.numFBRegions = pFbRegionInfoParams->numFBRegions;
+
+    //
+    // P2P tail reserve: optionally trim the top of the usable FB (see
+    // _p2pApplyFbTailReserve) so BAR1 == VRAM boards can pass the static
+    // BAR1 P2P check.
+    //
+    _p2pApplyFbTailReserve(pGpu, pMemoryManager, pFbRegionInfoParams->numFBRegions);
 
     // Round up to the closest megabyte.
     bias = (1 << 20) - 1;

@@ -765,7 +765,13 @@ _kp2pCapsGetStatusOverPcieBar1
     // Re-initialize to check loop back configuration if only single GPU in
     // requested mask.
     //
-    gpuInstance = (gpumgrGetSubDeviceCount(gpuMask) > 1) ? gpuInstance : 0;
+    // Count the GPUs in the mask directly. gpumgrGetSubDeviceCount() counts
+    // SLI subdevices, which is 1 for unlinked GPUs, so the old check reset
+    // the iterator for every non-SLI pair and each evaluation started with a
+    // self/loopback check that the HAL rejects. BAR1 P2P caps could then
+    // never succeed on non-SLI multi-GPU systems.
+    //
+    gpuInstance = (nvPopCount32(gpuMask) > 1) ? gpuInstance : 0;
 
     while ((pGpuPeer = gpumgrGetNextGpu(gpuMask, &gpuInstance)) != NULL)
     {
