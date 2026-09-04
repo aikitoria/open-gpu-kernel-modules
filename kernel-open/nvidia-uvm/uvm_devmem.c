@@ -613,6 +613,18 @@ void uvm_devmem_device_p2p_init(uvm_parent_gpu_t *parent_gpu)
 
     parent_gpu->device_p2p_initialised = false;
 
+    if (parent_gpu->rm_info.gpuArch >= NV2080_CTRL_MC_ARCH_INFO_ARCHITECTURE_GB100) {
+        // Static BAR1 is also the GPU peer aperture on non-coherent Blackwell.
+        // Registering it as P2PDMA memory would replace its pagemap operations
+        // and conflict with the BAR1-as-sysmem PTEs used for GPU peer access.
+        UVM_DBG_PRINT("Skipping PCI P2PDMA static BAR1 registration on non-coherent GPU %s "
+                      "(size 0x%llx, write-combined %u)\n",
+                      uvm_parent_gpu_name(parent_gpu),
+                      parent_gpu->static_bar1_size,
+                      parent_gpu->static_bar1_write_combined);
+        return;
+    }
+
     // RM sets static_bar1_size when it has created a contiguous BAR mapping
     // large enough to cover all of GPU memory that will be allocated to
     // userspace buffers. This is required to support the P2PDMA feature to

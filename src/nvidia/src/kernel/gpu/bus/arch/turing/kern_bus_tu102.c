@@ -377,23 +377,22 @@ kbusIsStaticBar1Supported_TU102
     MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
     KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
 
-    //
-    // Use fbAddrSpaceSizeMb in this function to make sure there's
-    // enough space for the any possible allocations in the RM
-    // reserved region to be mapped through the dynamic section of
-    // BAR1
-    //
     NvU64 fbSize            = pMemoryManager->Ram.fbAddrSpaceSizeMb << 20;
-    NvU64 fbSizeAligned     = RM_ALIGN_UP(fbSize, RM_PAGE_SIZE_2M);
+    NvU64 clientFbSizeAligned =
+        RM_ALIGN_DOWN(memmgrGetClientFbAddrSpaceSize(pGpu, pMemoryManager),
+                      RM_PAGE_SIZE_2M);
     NvU64 bar1VASize        = pKernelBus->bar1[gfid].mappableLength;
     NvU64 bar1VASizeAligned = RM_ALIGN_DOWN(bar1VASize, RM_PAGE_SIZE_2M);
+    NvU64 reservedSize;
+    NvU64 staticBar1Offset;
+    NvU64 maxStaticMapSize;
 
     if (gfid != 0)
     {
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    if ((fbSize == 0) || (bar1Size == 0))
+    if ((fbSize == 0) || (bar1Size == 0) || (clientFbSizeAligned == 0))
     {
         return NV_ERR_NOT_SUPPORTED;
     }
@@ -416,6 +415,16 @@ kbusIsStaticBar1Supported_TU102
         return NV_ERR_NOT_SUPPORTED;
     }
 
+    if (!portSafeAddU64(consoleSize, mailboxSize, &reservedSize) ||
+        reservedSize > NV_U64_MAX - (RM_PAGE_SIZE_512M - 1))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    staticBar1Offset = NV_ALIGN_UP(reservedSize, RM_PAGE_SIZE_512M);
+    maxStaticMapSize = (bar1VASizeAligned > staticBar1Offset) ?
+        bar1VASizeAligned - staticBar1Offset : 0;
+
     switch (pKernelBus->staticBar1ForceType)
     {
         case NV_REG_STR_RM_FORCE_STATIC_BAR1_DISABLE:
@@ -430,7 +439,7 @@ kbusIsStaticBar1Supported_TU102
                     RM_ALIGN_DOWN(memmgrGetClientFbAddrSpaceSize(pGpu, pMemoryManager),
                                   RM_PAGE_SIZE_2M);
 
-                if (bar1VASizeAligned < bar1MapSize)
+                if (maxStaticMapSize < bar1MapSize)
                 {
                     NV_PRINTF(LEVEL_ERROR, "BAR1 size %lld is not large enough to map FB size"
                                            "%lld to force static BAR1\n",
@@ -453,7 +462,7 @@ kbusIsStaticBar1Supported_TU102
 
                 //
                 // Auto-enable if there is enough space to map
-                // + all of FB once
+                // + the client-visible FB range
                 // + enough to reserve enough space for userD BAR mappings
                 //       for every channel in the system
                 //       (whether userD is allocated by RM or by the user)
@@ -469,31 +478,27 @@ kbusIsStaticBar1Supported_TU102
                 //
                 NvU32 userdSize = 0;
                 NvU32 numChannels = kfifoGetMaxChannelsInSystem(pGpu, pKernelFifo);
-                NvU64 requiredAutoBar1Size = fbSizeAligned;
+                NvU64 requiredAutoBar1Size;
                 NvU64 mmioPrivSize = 16 * RM_PAGE_SIZE;
                 NvU64 doorbellSize = 16 * RM_PAGE_SIZE;
+                NvU64 dynamicBar1Size;
 
                 kfifoGetUserdSizeAlign_HAL(pKernelFifo, &userdSize, NULL);
 
-                userdSize *= numChannels;
+                dynamicBar1Size = (NvU64)userdSize * numChannels + mmioPrivSize + doorbellSize;
 
-                requiredAutoBar1Size += userdSize;
-                requiredAutoBar1Size += mmioPrivSize;
-                requiredAutoBar1Size += doorbellSize;
-                requiredAutoBar1Size += consoleSize;
-                requiredAutoBar1Size += mailboxSize;
+                if (maxStaticMapSize < clientFbSizeAligned)
+                    return NV_ERR_NOT_SUPPORTED;
 
-                //
-                // Console mappings are already mapped from the bottom of the BAR1 VASpace,
-                // and mailboxes get mapped before the static BAR1 region. The static BAR1
-                // region needs to be aligned to 512 MB to allow for 512 MB page sizes, so
-                // we need to add in the space between the console and mailbox mappings due
-                // to the alignment. If there are no mailbox or console mappings, we don't
-                // need to add any alignment padding.
-                //
-                if ((consoleSize != 0) || (mailboxSize != 0))
+                // Dynamic mappings can also use the alignment gap.
+                NvU64 alignmentPadding = staticBar1Offset - reservedSize;
+                requiredAutoBar1Size = clientFbSizeAligned + staticBar1Offset;
+                if (dynamicBar1Size > alignmentPadding &&
+                    !portSafeAddU64(requiredAutoBar1Size,
+                                    dynamicBar1Size - alignmentPadding,
+                                    &requiredAutoBar1Size))
                 {
-                    requiredAutoBar1Size += RM_PAGE_SIZE_512M - ((consoleSize + mailboxSize) % RM_PAGE_SIZE_512M);
+                    return NV_ERR_NOT_SUPPORTED;
                 }
 
                 if (bar1VASizeAligned >= requiredAutoBar1Size)

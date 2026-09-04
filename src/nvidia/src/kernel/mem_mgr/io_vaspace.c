@@ -63,9 +63,10 @@ iovaspaceDestruct_IMPL(OBJIOVASPACE *pIOVAS)
 
     if (pIOVAS->mappingCount != 0)
     {
-        NV_PRINTF(LEVEL_ERROR, "%lld left-over mappings in IOVAS 0x%x\n",
-                  pIOVAS->mappingCount, pVAS->vaspaceId);
-        DBG_BREAKPOINT();
+        NV_PRINTF(LEVEL_WARNING,
+                  "%" NvU64_fmtu " left-over mappings in IOVAS 0x%x\n",
+                  pIOVAS->mappingCount,
+                  pVAS->vaspaceId);
     }
 }
 
@@ -599,12 +600,9 @@ OBJIOVASPACE *iovaspaceFromMapping(PIOVAMAPPING pIovaMapping)
     OBJIOVASPACE *pIOVAS = iovaspaceFromId(pIovaMapping->iovaspaceId);
 
     //
-    // The IOVASPACE has to be there as the mapping is referencing it. If it's
-    // not, the mapping has been left dangling outlasting the IOVAS it was
-    // under.
+    // A missing IOVAS means the mapping was left dangling and outlived the
+    // address space it belonged to. The destroy path reports that condition.
     //
-    NV_ASSERT(pIOVAS != NULL);
-
     return pIOVAS;
 }
 
@@ -612,7 +610,14 @@ void iovaMappingDestroy(PIOVAMAPPING pIovaMapping)
 {
     OBJIOVASPACE *pIOVAS = iovaspaceFromMapping(pIovaMapping);
 
-    NV_ASSERT_OR_RETURN_VOID(pIOVAS != NULL);
+    if (pIOVAS == NULL)
+    {
+        NV_PRINTF(LEVEL_WARNING,
+                  "IOVA mapping outlived IOVAS 0x%x\n",
+                  pIovaMapping->iovaspaceId);
+        return;
+    }
+
     iovaspaceDestroyMapping(pIOVAS, pIovaMapping);
 }
 

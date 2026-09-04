@@ -1130,8 +1130,11 @@ _kbifInitRegistryOverrides
 {
     NvU32 data32;
 
-    // P2P Override
-    pKernelBif->p2pOverride = BIF_P2P_NOT_OVERRIDEN;
+    // Enable BAR1 P2P reads and writes without overriding platform atomic capabilities.
+    pKernelBif->p2pOverride =
+        DRF_DEF(_REG_STR, _CL_FORCE_P2P, _READ, _ENABLE) |
+        DRF_DEF(_REG_STR, _CL_FORCE_P2P, _WRITE, _ENABLE) |
+        DRF_DEF(_REG_STR, _CL_FORCE_P2P, _ATOMICS, _DEFAULT);
     if (osReadRegistryDword(pGpu, NV_REG_STR_CL_FORCE_P2P, &data32) == NV_OK)
     {
         pKernelBif->p2pOverride = data32;
@@ -1147,7 +1150,7 @@ _kbifInitRegistryOverrides
         pKernelBif->forceP2PType = data32;
     }
 
-    pKernelBif->pcieP2PType = NV_REG_STR_RM_PCIEP2P_TYPE_DEFAULT;
+    pKernelBif->pcieP2PType = NV_REG_STR_RM_PCIEP2P_TYPE_BAR1;
     if (osReadRegistryDword(pGpu, NV_REG_STR_RM_PCIEP2P_TYPE, &data32) == NV_OK)
     {
         pKernelBif->pcieP2PType = data32;
@@ -2072,4 +2075,3 @@ kbifWaitForConfigAccessAfterReset_IMPL
 
     return NV_ERR_GENERIC;
 }
-

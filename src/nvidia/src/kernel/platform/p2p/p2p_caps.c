@@ -66,6 +66,36 @@ areGpusP2PCompatible(OBJGPU *pGpu0, OBJGPU *pGpu1)
     return NV_TRUE;
 }
 
+/**
+ * @brief Determines if all GPUs can use the proprietary PCIe P2P protocol
+ *
+ * Static BAR1 P2P does not exchange the architecture-specific mailbox
+ * protocol, so this compatibility check must only gate the proprietary PCIe
+ * fallback.
+ */
+static NvBool
+areAllGpusP2PCompatible(NvU32 gpuMask)
+{
+    NvU32 gpuInstance = 0;
+    OBJGPU *pGpu;
+    OBJGPU *pFirstGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance);
+
+    if (pFirstGpu == NULL)
+    {
+        return NV_FALSE;
+    }
+
+    while ((pGpu = gpumgrGetNextGpu(gpuMask, &gpuInstance)) != NULL)
+    {
+        if (!areGpusP2PCompatible(pFirstGpu, pGpu))
+        {
+            return NV_FALSE;
+        }
+    }
+
+    return NV_TRUE;
+}
+
 NV_STATUS
 p2pGetCaps
 (
@@ -896,33 +926,41 @@ p2pGetCapsStatus
     }
 
     //
-    // Check PCIE P2P connectivity.
-    //
-    // We can control P2P connectivity for PCI-E peers using regkeys, hence
-    // if either read or write is supported, return success. See
-    // _kp2pCapsCheckStatusOverridesForPcie for details.
+    // Check PCIe topology and proprietary P2P capabilities first to retain
+    // its common-switch result. BAR1 is a separate transport, so check it
+    // with fresh status even when proprietary compatibility failed.
     //
     if (_kp2pCapsGetStatusOverPcie(gpuMask, pP2PWriteCapStatus,
                                   pP2PReadCapStatus, &bCommonSwitchFound) == NV_OK)
     {
+        NvU8 bar1P2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_OK;
+        NvU8 bar1P2PReadCapStatus = NV0000_P2P_CAPS_STATUS_OK;
+        NvU8 bar1P2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
+
+        if (_kp2pCapsGetStatusOverPcieBar1(gpuMask, &bar1P2PWriteCapStatus,
+                &bar1P2PReadCapStatus, &bar1P2PAtomicsCapStatus,
+                bCommonSwitchFound) == NV_OK)
+        {
+            *pP2PWriteCapStatus = bar1P2PWriteCapStatus;
+            *pP2PReadCapStatus = bar1P2PReadCapStatus;
+            *pP2PAtomicsCapStatus = bar1P2PAtomicsCapStatus;
+            *pConnectivity = P2P_CONNECTIVITY_PCIE_BAR1;
+            return NV_OK;
+        }
+
+        // BAR1 is the only architecture-independent PCIe transport here.
+        if (!areAllGpusP2PCompatible(gpuMask))
+        {
+            *pP2PWriteCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
+            *pP2PReadCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
+            *pP2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
+            return NV_OK;
+        }
+
         if ((*pP2PWriteCapStatus == NV0000_P2P_CAPS_STATUS_OK) ||
             (*pP2PReadCapStatus == NV0000_P2P_CAPS_STATUS_OK))
         {
-            NvU8 bar1P2PWriteCapStatus = *pP2PWriteCapStatus;
-            NvU8 bar1P2PReadCapStatus = *pP2PReadCapStatus;
-            NvU8 bar1P2PAtomicsCapStatus = NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED;
-
             *pConnectivity = P2P_CONNECTIVITY_PCIE_PROPRIETARY;
-
-            if (_kp2pCapsGetStatusOverPcieBar1(gpuMask, &bar1P2PWriteCapStatus,
-                    &bar1P2PReadCapStatus, &bar1P2PAtomicsCapStatus, bCommonSwitchFound) == NV_OK)
-            {
-                *pP2PWriteCapStatus = bar1P2PWriteCapStatus;
-                *pP2PReadCapStatus = bar1P2PReadCapStatus;
-                *pP2PAtomicsCapStatus = bar1P2PAtomicsCapStatus;
-                *pConnectivity = P2P_CONNECTIVITY_PCIE_BAR1;
-            }
-
             return NV_OK;
         }
     }

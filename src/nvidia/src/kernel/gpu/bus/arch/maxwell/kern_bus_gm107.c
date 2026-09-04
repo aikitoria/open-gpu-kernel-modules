@@ -862,6 +862,43 @@ _kbusRequiresP2PMailboxBar1_GM107
            !kbusIsP2pMailboxClientAllocated(pKernelBus);
 }
 
+// Share BAR1 VA only; the console's physical reservation is unchanged.
+static NvBool
+_kbusCanShareConsoleWithStaticBar1_GM107
+(
+    OBJGPU *pGpu,
+    KernelBus *pKernelBus,
+    MEMORY_DESCRIPTOR *pConsoleMemDesc,
+    NvU32 gfid
+)
+{
+    KernelBif *pKernelBif = GPU_GET_KERNEL_BIF(pGpu);
+    NvU64 staticSize;
+
+    if (!RMCFG_FEATURE_PLATFORM_UNIX || !IS_GFID_PF(gfid) || IS_VIRTUAL(pGpu) ||
+        pKernelBif == NULL ||
+        pKernelBif->pcieP2PType != NV_REG_STR_RM_PCIEP2P_TYPE_BAR1 ||
+        kbusIsBar1PhysicalModeEnabled(pKernelBus) ||
+        pKernelBus->p2pPcie.writeMailboxTotalSize != 0 ||
+        memdescGetAddressSpace(pConsoleMemDesc) != ADDR_FBMEM ||
+        memdescGetPteKind(pConsoleMemDesc) != NV_MMU_PTE_KIND_PITCH ||
+        memdescGetPhysAddr(pConsoleMemDesc, AT_GPU, 0) != 0)
+    {
+        return NV_FALSE;
+    }
+
+    staticSize = RM_ALIGN_DOWN(
+        memmgrGetClientFbAddrSpaceSize(pGpu, GPU_GET_MEMORY_MANAGER(pGpu)),
+        RM_PAGE_SIZE_2M);
+    if (memdescGetSize(pConsoleMemDesc) == 0 ||
+        memdescGetSize(pConsoleMemDesc) > staticSize)
+    {
+        return NV_FALSE;
+    }
+
+    return kbusIsStaticBar1Supported_HAL(pGpu, pKernelBus, gfid, 0, 0) == NV_OK;
+}
+
 /*!
  * @brief Init BAR1.
  *
@@ -891,6 +928,7 @@ kbusInitBar1_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, NvU32 gfid)
                                                    RMCFG_FEATURE_PLATFORM_WINDOWS);
     NvU64             consoleSize     = 0;
     NvBool            bStaticBar1Supported;
+    NvBool            bShareConsoleWithStaticBar1 = NV_FALSE;
 
     vaRangeMax = pKernelBus->bar1[gfid].apertureLength - 1;
 
@@ -1040,8 +1078,7 @@ kbusInitBar1_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, NvU32 gfid)
     NV_ASSERT(pKernelBus->bar1[gfid].apertureLength <= kbusGetPciBarSize(pKernelBus, 1));
 
     //
-    // If we need to preserve a console mapping at the start of BAR1, we
-    // need to allocate the VA space before anything else gets allocated.
+    // Reserve console VA unless it can share the static mapping.
     //
     // This must come before enabling the static BAR1 mapping for the same reason
     // The consoleSize is also used for below kbusIsStaticBar1Supported_HAL check.
@@ -1076,6 +1113,14 @@ kbusInitBar1_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, NvU32 gfid)
         if (pConsoleMemDesc)
         {
             consoleSize = memdescGetSize(pConsoleMemDesc);
+
+            bShareConsoleWithStaticBar1 = !bSmoothTransitionEnabled &&
+                _kbusCanShareConsoleWithStaticBar1_GM107(pGpu, pKernelBus, pConsoleMemDesc, gfid);
+            if (bShareConsoleWithStaticBar1)
+            {
+                consoleSize = 0;
+                goto console_mapping_done;
+            }
 
             NV_PRINTF(LEVEL_INFO,
                         "preserving console BAR1 mapping (0x%llx)\n",
@@ -1122,6 +1167,7 @@ kbusInitBar1_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, NvU32 gfid)
         }
     }
 
+console_mapping_done:
     //
     // Reserve space for max number of peers for the mailbox p2p  regardless of SLI config
     //
@@ -1171,6 +1217,19 @@ kbusInitBar1_GM107(OBJGPU *pGpu, KernelBus *pKernelBus, NvU32 gfid)
         NV_ASSERT_OK_OR_GOTO(rmStatus,
                              kbusEnableStaticBar1Mapping_HAL(pGpu, pKernelBus, gfid, bar1Offset),
                              kbusInitBar1_failed);
+
+        if (bShareConsoleWithStaticBar1)
+        {
+            NV_ASSERT(bar1Offset == 0);
+            pKernelBus->bBar1ConsolePreserved = NV_TRUE;
+            NV_PRINTF(LEVEL_INFO, "Console shares static BAR1 identity mapping\n");
+        }
+    }
+    else if (bShareConsoleWithStaticBar1)
+    {
+        // Eligibility must not change after skipping the separate console map.
+        rmStatus = NV_ERR_INVALID_STATE;
+        goto kbusInitBar1_failed;
     }
 
     //
@@ -1243,6 +1302,14 @@ kbusUnmapPreservedConsole_GM107
 {
     if (pKernelBus->bBar1ConsolePreserved && IS_GFID_PF(gfid))
     {
+        if (pKernelBus->bar1[gfid].bStaticBar1Enabled &&
+            pKernelBus->bar1[gfid].staticBar1.startOffset == 0)
+        {
+            // Static BAR1 owns this mapping.
+            pKernelBus->bBar1ConsolePreserved = NV_FALSE;
+            return;
+        }
+
         MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
         PMEMORY_DESCRIPTOR pConsoleMemDesc =
             memmgrGetReservedConsoleMemDesc(pGpu, pMemoryManager);
