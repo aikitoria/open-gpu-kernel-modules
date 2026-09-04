@@ -57,6 +57,7 @@ dmaAllocBar1P2PMapping_GH100
     OBJGPU *pPeerGpu = NULL;
     KernelBus *pPeerKernelBus = NULL;
     NV_STATUS status = NV_OK;
+    NvBool bBar1Mapped = NV_FALSE;
 
     if (params == NULL ||
         params->pVas == NULL ||
@@ -94,6 +95,8 @@ dmaAllocBar1P2PMapping_GH100
     if (status != NV_OK)
         goto cleanup;
 
+    bBar1Mapped = NV_TRUE;
+
     bar1PhyAddr = gpumgrGetGpuPhysFbAddr(pPeerGpu) + phyAddr;
 
     NV_PRINTF(LEVEL_INFO, "bar1p2p surface mapped at bar1PhyAddr 0x%llx, len 0x%llx\n",
@@ -127,6 +130,7 @@ dmaAllocBar1P2PMapping_GH100
 
     params->pDmaMappingInfo->pBar1P2PVirtMemDesc = pBar1P2PVirtMemDesc;
     params->pDmaMappingInfo->pBar1P2PPhysMemDesc = pBar1P2PPhysMemDesc;
+    params->pDmaMappingInfo->bar1P2PApertureOffset = phyAddr;
 
     // Save the MemDesc to be the newly created sysmem in the peer BAR1 aperture
     params->pMemDescOut = pBar1P2PVirtMemDesc;
@@ -147,10 +151,10 @@ dmaAllocBar1P2PMapping_GH100
     return NV_OK;;
 
 cleanup:
-    if (phyAddr != 0)
+    if (bBar1Mapped)
     {
         kbusUnmapFbApertureSingle(pPeerGpu, pPeerKernelBus,
-                                  params->pPeerMemDesc,
+                                  pBar1P2PPhysMemDesc,
                                   phyAddr,
                                   bar1ApertureLen,
                                   BUS_MAP_FB_FLAGS_MAP_UNICAST);
@@ -186,17 +190,18 @@ dmaFreeBar1P2PMapping_GH100
     {
         OBJGPU *pPeerGpu = pDmaMappingInfo->pBar1P2PPhysMemDesc->pGpu;
         KernelBus *pPeerKernelBus = GPU_GET_KERNEL_BUS(pPeerGpu);
-        NvU64   bar1PhysAddr = memdescGetPhysAddr(pDmaMappingInfo->pBar1P2PVirtMemDesc, AT_CPU, 0);
+        NvU64   bar1ApertureOffset = pDmaMappingInfo->bar1P2PApertureOffset;
         NvU64   bar1MapSize  = memdescGetSize(pDmaMappingInfo->pBar1P2PVirtMemDesc);
 
         // Unmap the BAR1 mapping
         kbusUnmapFbApertureSingle(pPeerGpu, pPeerKernelBus,
                                   pDmaMappingInfo->pBar1P2PPhysMemDesc,
-                                  bar1PhysAddr,
+                                  bar1ApertureOffset,
                                   bar1MapSize,
                                   BUS_MAP_FB_FLAGS_MAP_UNICAST);
 
-        NV_PRINTF(LEVEL_INFO, "bar1p2p surface UN-mapped at 0x%llx + 0x%llx\n", bar1PhysAddr, bar1MapSize);
+        NV_PRINTF(LEVEL_INFO, "bar1p2p surface UN-mapped at 0x%llx + 0x%llx\n",
+                              bar1ApertureOffset, bar1MapSize);
 
         // Destroy the source memory descriptor
         memdescDestroy(pDmaMappingInfo->pBar1P2PPhysMemDesc);
