@@ -198,6 +198,19 @@ kbusSetupMailboxAccess_GM200
     PMEMORY_DESCRIPTOR *ppWMBoxMemDesc
 )
 {
+    if (pKernelBus0->p2pPcie.writeMailboxBar1Addr ==
+        PCIE_P2P_INVALID_WRITE_MAILBOX_ADDR)
+    {
+        NV_PRINTF(LEVEL_ERROR,
+                  "PCIe mailbox P2P requested without an allocated mailbox area "
+                  "ownerGpu=%u accessorGpu=%u peer=%u writeMailboxBar1Addr=0x%llx\n",
+                  gpuGetInstance(pGpu0),
+                  gpuGetInstance(pGpu1),
+                  local2Remote,
+                  pKernelBus0->p2pPcie.writeMailboxBar1Addr);
+        return ~0ULL;
+    }
+
     return kbusSetupPeerBarAccess(pGpu0, pGpu1,
                 gpumgrGetGpuPhysFbAddr(pGpu0) +
                     pKernelBus0->p2pPcie.writeMailboxBar1Addr +
@@ -797,6 +810,15 @@ kbusSetP2PMailboxBar1Area_GM200
 
     if (!kbusIsP2pMailboxClientAllocated(pKernelBus))
     {
+        if (pKernelBus->p2pPcie.writeMailboxBar1Addr ==
+            PCIE_P2P_INVALID_WRITE_MAILBOX_ADDR)
+        {
+            NV_PRINTF(LEVEL_ERROR,
+                      "P2P mailbox area expected from RM but no valid address is installed gpu=%u\n",
+                      gpuGetInstance(pGpu));
+            return NV_ERR_INVALID_STATE;
+        }
+
         // P2P mailbox area already allocated by RM. Nothing to do.
         return NV_OK;
     }
