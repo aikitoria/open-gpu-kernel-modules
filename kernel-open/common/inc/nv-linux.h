@@ -923,6 +923,7 @@ typedef struct nv_alloc_s {
     unsigned int   cache_type;
     unsigned int   num_pages;
     unsigned int   order;
+    unsigned int   compound_order;      /* 0 for base pages */
     unsigned int   size;
     nvidia_pte_t  *page_table;          /* array of physical pages allocated */
     unsigned int   pid;
@@ -933,6 +934,14 @@ typedef struct nv_alloc_s {
     struct sg_table *import_sgt;
     dma_addr_t     dma_handle;          /* dma handle used by dma_alloc_coherent(), dma_free_coherent() */
 } nv_alloc_t;
+
+static inline NvU64 nv_alloc_page_address(nv_alloc_t *at, NvU64 page_index)
+{
+    NvU64 offset = page_index & ((1ULL << at->compound_order) - 1);
+
+    return at->page_table[page_index >> at->compound_order].phys_addr +
+           (offset << PAGE_SHIFT);
+}
 
 /**
  * nv_is_dma_direct - return true if direct_dma is enabled
@@ -1054,6 +1063,7 @@ typedef struct nv_dma_map_s {
     NvBool contiguous;
     NvU32 cache_type;
     NvBool bReadOnlyDeviceMap;
+    NvU64 page_granularity;             /* bytes per page array entry */
     struct sg_table *import_sgt;
 
     union

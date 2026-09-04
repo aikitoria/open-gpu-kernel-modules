@@ -81,9 +81,10 @@ static NV_STATUS nv_dma_map_contig(
 )
 {
     enum dma_data_direction direction = nv_dma_get_direction(dma_map);
+    NvU64 mapping_size = dma_map->page_count * dma_map->page_granularity;
 
     *va = dma_map_page_attrs(dma_map->dev, dma_map->pages[0], 0,
-                             dma_map->page_count * PAGE_SIZE,
+                             mapping_size,
                              direction,
                              (dma_map->cache_type == NV_MEMORY_UNCACHED) ?
                               DMA_ATTR_SKIP_CPU_SYNC : 0);
@@ -94,12 +95,13 @@ static NV_STATUS nv_dma_map_contig(
 
     dma_map->mapping.contig.dma_addr = *va;
 
-    if (!nv_dma_is_addressable(dma_dev, *va, dma_map->page_count * PAGE_SIZE))
+    if ((*va & (dma_map->page_granularity - 1)) != 0 ||
+        !nv_dma_is_addressable(dma_dev, *va, mapping_size))
     {
         NV_DMA_DEV_PRINTF(NV_DBG_ERRORS, dma_dev,
                 "DMA address not in addressable range of device "
                 "(0x%llx-0x%llx, 0x%llx-0x%llx)\n",
-                *va, *va + (dma_map->page_count * PAGE_SIZE - 1),
+                *va, *va + (mapping_size - 1),
                 dma_dev->addressable_range.start,
                 dma_dev->addressable_range.limit);
         nv_dma_unmap_contig(dma_map);
@@ -112,9 +114,10 @@ static NV_STATUS nv_dma_map_contig(
 static void nv_dma_unmap_contig(nv_dma_map_t *dma_map)
 {
     enum dma_data_direction direction = nv_dma_get_direction(dma_map);
+    NvU64 mapping_size = dma_map->page_count * dma_map->page_granularity;
 
     dma_unmap_page_attrs(dma_map->dev, dma_map->mapping.contig.dma_addr,
-                         dma_map->page_count * PAGE_SIZE,
+                         mapping_size,
                          direction,
                          (dma_map->cache_type == NV_MEMORY_UNCACHED) ?
                           DMA_ATTR_SKIP_CPU_SYNC : 0);
@@ -147,85 +150,123 @@ static void nv_fill_scatterlist
 
 NV_STATUS nv_create_dma_map_scatterlist(nv_dma_map_t *dma_map)
 {
+    NV_STATUS status;
+    nv_dma_submap_t *submap;
+    NvU32 i;
+
+    /* sg_alloc_table_from_pages() expects base pages. */
+    if (dma_map->page_granularity > PAGE_SIZE)
+    {
+        int ret;
+
+        dma_map->mapping.discontig.submap_count = 1;
+
+        status = os_alloc_mem((void **)&dma_map->mapping.discontig.submaps,
+            sizeof(nv_dma_submap_t));
+        if (status != NV_OK)
+            return status;
+
+        os_mem_set(dma_map->mapping.discontig.submaps, 0, sizeof(nv_dma_submap_t));
+
+        submap = &dma_map->mapping.discontig.submaps[0];
+        submap->page_count = dma_map->page_count;
+
+        ret = sg_alloc_table(&submap->sgt, submap->page_count, NV_GFP_KERNEL);
+        if (ret != 0)
+        {
+            os_free_mem(dma_map->mapping.discontig.submaps);
+            return NV_ERR_OPERATING_SYSTEM;
+        }
+
+        {
+            struct scatterlist *sg;
+            unsigned int j;
+
+            for_each_sg(submap->sgt.sgl, sg, submap->page_count, j)
+                sg_set_page(sg, dma_map->pages[j], dma_map->page_granularity, 0);
+        }
+
+        return NV_OK;
+    }
+
     /*
      * We need to split our mapping into at most 4GB - PAGE_SIZE chunks.
      * The Linux kernel stores the length (and offset) of a scatter-gather
      * segment as an unsigned int, so it will overflow if we try to do
      * anything larger.
      */
-    NV_STATUS status;
-    nv_dma_submap_t *submap;
-    NvU32 i;
-    NvU64 allocated_size = 0;
-    NvU64 num_submaps = dma_map->page_count + NV_DMA_SUBMAP_MAX_PAGES - 1;
-    NvU64 total_size = dma_map->page_count << PAGE_SHIFT;
-
-    /*
-     * This turns into 64-bit division, which the ARMv7 kernel doesn't provide
-     * implicitly. Instead, we need to use the platform's do_div() to perform
-     * the division.
-     */
-    do_div(num_submaps, NV_DMA_SUBMAP_MAX_PAGES);
-
-    WARN_ON(NvU64_HI32(num_submaps) != 0);
-
-    if (dma_map->import_sgt && (num_submaps != 1))
     {
-        return -EINVAL;
-    }
+        NvU64 allocated_size = 0;
+        NvU64 num_submaps = dma_map->page_count + NV_DMA_SUBMAP_MAX_PAGES - 1;
+        NvU64 total_size = dma_map->page_count << PAGE_SHIFT;
 
-    dma_map->mapping.discontig.submap_count = NvU64_LO32(num_submaps);
+        /*
+         * This turns into 64-bit division, which the ARMv7 kernel doesn't provide
+         * implicitly. Instead, we need to use the platform's do_div() to perform
+         * the division.
+         */
+        do_div(num_submaps, NV_DMA_SUBMAP_MAX_PAGES);
 
-    status = os_alloc_mem((void **)&dma_map->mapping.discontig.submaps,
-        sizeof(nv_dma_submap_t) * dma_map->mapping.discontig.submap_count);
-    if (status != NV_OK)
-    {
-        return status;
-    }
+        WARN_ON(NvU64_HI32(num_submaps) != 0);
 
-    os_mem_set((void *)dma_map->mapping.discontig.submaps, 0,
-        sizeof(nv_dma_submap_t) * dma_map->mapping.discontig.submap_count);
+        if (dma_map->import_sgt && (num_submaps != 1))
+        {
+            return -EINVAL;
+        }
 
-    /* If we have an imported SGT, just use that directly. */
-    if (dma_map->import_sgt)
-    {
-        dma_map->mapping.discontig.submaps[0].page_count = dma_map->page_count;
-        dma_map->mapping.discontig.submaps[0].sgt = *dma_map->import_sgt;
-        dma_map->mapping.discontig.submaps[0].imported = NV_TRUE;
+        dma_map->mapping.discontig.submap_count = NvU64_LO32(num_submaps);
 
-        return status;
-    }
-
-    NV_FOR_EACH_DMA_SUBMAP(dma_map, submap, i)
-    {
-        NvU64 submap_size = NV_MIN(NV_DMA_SUBMAP_MAX_PAGES << PAGE_SHIFT,
-                                   total_size - allocated_size);
-
-        submap->page_count = (NvU32)(submap_size >> PAGE_SHIFT);
-
-        status = NV_ALLOC_DMA_SUBMAP_SCATTERLIST(dma_map, submap, i);
+        status = os_alloc_mem((void **)&dma_map->mapping.discontig.submaps,
+            sizeof(nv_dma_submap_t) * dma_map->mapping.discontig.submap_count);
         if (status != NV_OK)
         {
-            submap->page_count = 0;
-            break;
+            return status;
         }
+
+        os_mem_set((void *)dma_map->mapping.discontig.submaps, 0,
+            sizeof(nv_dma_submap_t) * dma_map->mapping.discontig.submap_count);
+
+        /* If we have an imported SGT, just use that directly. */
+        if (dma_map->import_sgt)
+        {
+            dma_map->mapping.discontig.submaps[0].page_count = dma_map->page_count;
+            dma_map->mapping.discontig.submaps[0].sgt = *dma_map->import_sgt;
+            dma_map->mapping.discontig.submaps[0].imported = NV_TRUE;
+
+            return status;
+        }
+
+        NV_FOR_EACH_DMA_SUBMAP(dma_map, submap, i)
+        {
+            NvU64 submap_size = NV_MIN(NV_DMA_SUBMAP_MAX_PAGES << PAGE_SHIFT,
+                                       total_size - allocated_size);
+
+            submap->page_count = (NvU32)(submap_size >> PAGE_SHIFT);
+
+            status = NV_ALLOC_DMA_SUBMAP_SCATTERLIST(dma_map, submap, i);
+            if (status != NV_OK)
+            {
+                submap->page_count = 0;
+                break;
+            }
 
 #if defined(NV_DOM0_KERNEL_PRESENT)
-        {
-            NvU64 page_idx = NV_DMA_SUBMAP_IDX_TO_PAGE_IDX(i);
-            nv_fill_scatterlist(submap->sgt.sgl,
-                &dma_map->pages[page_idx], submap->page_count);
-        }
+            {
+                NvU64 page_idx = NV_DMA_SUBMAP_IDX_TO_PAGE_IDX(i);
+                nv_fill_scatterlist(submap->sgt.sgl,
+                    &dma_map->pages[page_idx], submap->page_count);
+            }
 #endif
 
-        allocated_size += submap_size;
-    }
+            allocated_size += submap_size;
+        }
 
-    WARN_ON(allocated_size != total_size);
+        WARN_ON(allocated_size != total_size);
 
-    if (status != NV_OK)
-    {
-        nv_destroy_dma_map_scatterlist(dma_map);
+        if (status != NV_OK)
+        {
+            nv_destroy_dma_map_scatterlist(dma_map);
+        }
     }
 
     return status;
@@ -305,7 +346,7 @@ void nv_destroy_dma_map_scatterlist(nv_dma_map_t *dma_map)
     os_free_mem(dma_map->mapping.discontig.submaps);
 }
 
-static void nv_load_dma_map_scatterlist(
+static NV_STATUS nv_load_dma_map_scatterlist(
     nv_dma_map_t *dma_map,
     NvU64 *va_array
 )
@@ -313,25 +354,31 @@ static void nv_load_dma_map_scatterlist(
     unsigned int i, j;
     struct scatterlist *sg;
     nv_dma_submap_t *submap;
-    NvU64 sg_addr, sg_off, sg_len, k, l = 0;
+    NvU64 l = 0;
 
     NV_FOR_EACH_DMA_SUBMAP(dma_map, submap, i)
     {
         for_each_sg(submap->sgt.sgl, sg, submap->sg_map_count, j)
         {
-            /*
-             * It is possible for pci_map_sg() to merge scatterlist entries, so
-             * make sure we account for that here.
-             */
-            for (sg_addr = sg_dma_address(sg), sg_len = sg_dma_len(sg),
-                    sg_off = 0, k = 0;
-                 (sg_off < sg_len) && (k < submap->page_count);
-                 sg_off += PAGE_SIZE, l++, k++)
+            NvU64 sg_addr = sg_dma_address(sg);
+            NvU64 sg_len = sg_dma_len(sg);
+            NvU64 sg_off;
+
+            if ((sg_addr & (dma_map->page_granularity - 1)) != 0 ||
+                sg_len % dma_map->page_granularity != 0 ||
+                sg_len / dma_map->page_granularity > dma_map->page_count - l)
+                return NV_ERR_INVALID_ADDRESS;
+
+            /* DMA mapping may merge adjacent entries. */
+            for (sg_off = 0; sg_off < sg_len;
+                 sg_off += dma_map->page_granularity, l++)
             {
                 va_array[l] = sg_addr + sg_off;
             }
         }
     }
+
+    return l == dma_map->page_count ? NV_OK : NV_ERR_INVALID_ADDRESS;
 }
 
 static NV_STATUS nv_dma_map_scatterlist(
@@ -360,11 +407,16 @@ static NV_STATUS nv_dma_map_scatterlist(
         return status;
     }
 
-    nv_load_dma_map_scatterlist(dma_map, va_array);
+    status = nv_load_dma_map_scatterlist(dma_map, va_array);
+    if (status != NV_OK)
+    {
+        nv_dma_unmap_scatterlist(dma_map);
+        return status;
+    }
 
     for (i = 0; i < dma_map->page_count; i++)
     {
-        if (!nv_dma_is_addressable(dma_dev, va_array[i], PAGE_SIZE))
+        if (!nv_dma_is_addressable(dma_dev, va_array[i], dma_map->page_granularity))
         {
             NV_DMA_DEV_PRINTF(NV_DBG_ERRORS, dma_dev,
                     "DMA address not in addressable range of device "
@@ -424,6 +476,7 @@ NV_STATUS NV_API_CALL nv_dma_map_sgt(
     dma_map->contiguous = NV_FALSE;
     dma_map->cache_type = cache_type;
     dma_map->bReadOnlyDeviceMap = bReadOnlyDeviceMap;
+    dma_map->page_granularity = PAGE_SIZE;
 
     dma_map->mapping.discontig.submap_count = 0;
     status = nv_dma_map_scatterlist(dma_dev, dma_map, va_array);
@@ -469,6 +522,7 @@ static NV_STATUS NV_API_CALL nv_dma_map_pages(
     NvU64           *va_array,
     NvBool           contig,
     NvU32            cache_type,
+    NvU64            page_granularity,
     NvBool           bReadOnlyDeviceMap,
     void           **priv
 )
@@ -507,6 +561,7 @@ static NV_STATUS NV_API_CALL nv_dma_map_pages(
     dma_map->contiguous = contig;
     dma_map->cache_type = cache_type;
     dma_map->bReadOnlyDeviceMap = bReadOnlyDeviceMap;
+    dma_map->page_granularity = page_granularity;
 
     if (dma_map->page_count > 1 && !dma_map->contiguous)
     {
@@ -671,8 +726,17 @@ NV_STATUS NV_API_CALL nv_dma_map_alloc
     }
 
     *priv = pages;
-    status = nv_dma_map_pages(dma_dev, page_count, va_array, contig, cache_type,
-                              bReadOnlyDeviceMap, priv);
+
+    {
+        NvU64 page_granularity = PAGE_SIZE;
+
+        if (at != NULL && at->compound_order > 0)
+            page_granularity = (NvU64)PAGE_SIZE << at->compound_order;
+
+        status = nv_dma_map_pages(dma_dev, page_count, va_array, contig,
+                                  cache_type, page_granularity,
+                                  bReadOnlyDeviceMap, priv);
+    }
     if (status != NV_OK)
     {
         *priv = at;
@@ -894,7 +958,7 @@ void NV_API_CALL nv_dma_cache_invalidate
     {
         dma_sync_single_for_device(dma_dev->dev,
                                    dma_map->mapping.contig.dma_addr,
-                                   (size_t) PAGE_SIZE * dma_map->page_count,
+                                   (size_t) dma_map->page_granularity * dma_map->page_count,
                                    DMA_FROM_DEVICE);
     }
     else

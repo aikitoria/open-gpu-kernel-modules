@@ -2325,7 +2325,15 @@ static NV_STATUS RmGetMmapPteArray(
         return status;
     }
 
-    if (!nvuap->contig)
+    if (!nvuap->contig &&
+        memdescGetFlag(pMemDesc, MEMDESC_FLAGS_EXT_PAGE_ARRAY_MEM) &&
+        pMemDesc->pageArrayGranularity > NV_RM_PAGE_SIZE)
+    {
+        pages = nvuap->memArea.pRanges[0].size / os_page_size;
+        memdescGetPhysAddrs(pMemDesc, AT_CPU, nvuap->offset,
+                           os_page_size, pages, nvuap->page_array);
+    }
+    else if (!nvuap->contig)
     {
         pteArray = memdescGetPteArray(pMemDesc, AT_CPU);
         if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))

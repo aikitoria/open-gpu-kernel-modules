@@ -171,14 +171,19 @@ nvidia_vma_access(
             goto done;
         }
 
-        if (pageIndex >= at->num_pages)
+        if ((pageIndex >> at->compound_order) >= at->num_pages)
         {
             ret = -EINVAL;
             goto done;
         }
 
-        pageIndex = nv_array_index_no_speculate(pageIndex, at->num_pages);
-        kernel_mapping = (void *)(at->page_table[pageIndex].virt_addr + pageOffset);
+        pageIndex = nv_array_index_no_speculate(pageIndex,
+                                               (NvU64)at->num_pages << at->compound_order);
+        if (at->compound_order != 0)
+            kernel_mapping = (NvU8 *)page_address(NV_GET_PAGE_STRUCT(
+                                 nv_alloc_page_address(at, pageIndex))) + pageOffset;
+        else
+            kernel_mapping = (void *)(at->page_table[pageIndex].virt_addr + pageOffset);
     }
     else if (has_pages)
     {
@@ -471,7 +476,7 @@ static int nvidia_mmap_sysmem(
                 vma->vm_page_prot = nv_adjust_pgprot(vma->vm_page_prot);
 
             ret = vm_insert_page(vma, start,
-                                 NV_GET_PAGE_STRUCT(at->page_table[j].phys_addr));
+                                 NV_GET_PAGE_STRUCT(nv_alloc_page_address(at, j)));
         }
 
         if (ret)
@@ -679,7 +684,8 @@ int nvidia_mmap_helper(
         mmap_size = NV_VMA_SIZE(vma);
         pages = mmap_size >> PAGE_SHIFT;
 
-        if ((page_index + pages) > at->num_pages)
+        if (page_index > ((NvU64)at->num_pages << at->compound_order) ||
+            pages > ((NvU64)at->num_pages << at->compound_order) - page_index)
         {
             ret = -ERANGE;
             goto done;

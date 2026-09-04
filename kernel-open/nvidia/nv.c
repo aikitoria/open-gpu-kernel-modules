@@ -3434,12 +3434,21 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     NvU64 i;
     struct page **user_pages;
     nv_linux_state_t *nvl;
+    NvU32 compound_order;
+    NvU64 effective_count;
 
     nv_printf(NV_DBG_MEMINFO, "NVRM: VM: nv_register_user_pages: 0x%" NvU64_fmtx"\n", page_count);
     user_pages = *priv_data;
     nvl = NV_GET_NVL_FROM_NV_STATE(nv);
 
-    at = nvos_create_alloc(nvl->dev, page_count);
+    compound_order = nv_get_page_array_compound_order(user_pages);
+
+    if (compound_order > 0)
+        effective_count = page_count >> compound_order;
+    else
+        effective_count = page_count;
+
+    at = nvos_create_alloc(nvl->dev, effective_count);
 
     if (at == NULL)
     {
@@ -3460,9 +3469,10 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     if (unencrypted)
         at->flags.unencrypted = NV_TRUE;
 
+    at->compound_order = compound_order;
     at->order = get_order(at->num_pages * PAGE_SIZE);
 
-    for (i = 0; i < page_count; i++)
+    for (i = 0; i < effective_count; i++)
     {
         /*
          * We only assign the physical address and not the DMA address, since
@@ -3485,6 +3495,23 @@ NV_STATUS NV_API_CALL nv_register_user_pages(
     NV_PRINT_AT(NV_DBG_MEMINFO, at);
 
     return NV_OK;
+}
+
+NvU32 NV_API_CALL nv_get_compound_order(
+    void *priv_data
+)
+{
+    nv_alloc_t *at = priv_data;
+    return at->compound_order;
+}
+
+/* Matches nv_page_array_header_t in os-mlock.c. */
+NvU32 NV_API_CALL nv_get_page_array_compound_order(
+    void *page_array
+)
+{
+    NvU64 *header = (NvU64 *)((NvU8 *)page_array - 2 * sizeof(NvU64));
+    return (NvU32)header[1];
 }
 
 void NV_API_CALL nv_unregister_user_pages(
@@ -3714,12 +3741,13 @@ NV_STATUS NV_API_CALL nv_get_num_phys_pages(
 )
 {
     nv_alloc_t *at = pAllocPrivate;
+    NvU64 page_count = (NvU64)at->num_pages << at->compound_order;
 
-    if (!pNumPages) {
+    if (!pNumPages || page_count > NV_U32_MAX) {
         return NV_ERR_INVALID_ARGUMENT;
     }
 
-    *pNumPages = at->num_pages;
+    *pNumPages = page_count;
 
     return NV_OK;
 }
@@ -3733,16 +3761,16 @@ NV_STATUS NV_API_CALL nv_get_phys_pages(
     nv_alloc_t *at = pAllocPrivate;
     struct page **pages = (struct page **)pPages;
     NvU32 page_count;
-    int i;
+    NvU32 i;
 
     if (!pNumPages || !pPages) {
         return NV_ERR_INVALID_ARGUMENT;
     }
 
-    page_count = NV_MIN(*pNumPages, at->num_pages);
+    page_count = NV_MIN(*pNumPages, (NvU64)at->num_pages << at->compound_order);
 
     for (i = 0; i < page_count; i++) {
-        pages[i] = NV_GET_PAGE_STRUCT(at->page_table[i].phys_addr);
+        pages[i] = NV_GET_PAGE_STRUCT(nv_alloc_page_address(at, i));
     }
 
     *pNumPages = page_count;
@@ -3774,6 +3802,11 @@ void* NV_API_CALL nv_alloc_kernel_mapping(
     NvUPtr virt_addr;
     struct page **pages;
     NvBool isUserAllocatedMem;
+    NvU64 num_pages = (NvU64)at->num_pages << at->compound_order;
+
+    if (pageIndex >= num_pages || pageOffset >= PAGE_SIZE ||
+        size > ((num_pages - pageIndex) << PAGE_SHIFT) - pageOffset)
+        return NULL;
 
     //
     // For User allocated memory (like ErrorNotifier's) which is NOT allocated
@@ -3783,8 +3816,8 @@ void* NV_API_CALL nv_alloc_kernel_mapping(
     // those pages to obtain virtual address.
     //
     isUserAllocatedMem = at->flags.user &&
-                        !at->page_table[pageIndex].virt_addr &&
-                         at->page_table[pageIndex].phys_addr;
+                        !at->page_table[pageIndex >> at->compound_order].virt_addr &&
+                         at->page_table[pageIndex >> at->compound_order].phys_addr;
 
     //
     // User memory may NOT have kernel VA. So check this and fallback to else
@@ -3820,7 +3853,7 @@ void* NV_API_CALL nv_alloc_kernel_mapping(
             }
 
             for (j = 0; j < page_count; j++)
-                pages[j] = NV_GET_PAGE_STRUCT(at->page_table[pageIndex+j].phys_addr);
+                pages[j] = NV_GET_PAGE_STRUCT(nv_alloc_page_address(at, pageIndex + j));
 
             virt_addr = nv_vm_map_pages(pages, page_count,
                 at->cache_type == NV_MEMORY_CACHED, at->flags.unencrypted);
