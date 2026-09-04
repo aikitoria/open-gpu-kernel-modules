@@ -190,6 +190,8 @@ osCreateMemdescFromPages
     NvU32 gpuCachedFlags;
     NvBool bUnprotected = NV_FALSE;
     NvU64 osPageCount;
+    NvU32 compoundOrder;
+    NvU64 memdescSize;
 
     //
     // Align size up to os page size. This is important in
@@ -200,6 +202,20 @@ osCreateMemdescFromPages
     size = NV_ALIGN_UP64(size, os_page_size);
 
     osPageCount = size >> os_page_shift;
+
+    // Size the PTE array by hugepage count.
+    compoundOrder = nv_get_page_array_compound_order(*ppPrivate);
+
+    if (compoundOrder > 0)
+    {
+        NvU64 hugepageCount = size >> (os_page_shift + compoundOrder);
+
+        memdescSize = hugepageCount * NV_RM_PAGE_SIZE;
+    }
+    else
+    {
+        memdescSize = size;
+    }
 
     if (FLD_TEST_DRF(OS02, _FLAGS, _ALLOC_NISO_DISPLAY, _YES, flags))
     {
@@ -223,7 +239,7 @@ osCreateMemdescFromPages
         memdescFlags |= MEMDESC_FLAGS_DEVICE_READ_ONLY;
     }
 
-    rmStatus = memdescCreate(ppMemDesc, pGpu, size, 0,
+    rmStatus = memdescCreate(ppMemDesc, pGpu, memdescSize, 0,
                              NV_MEMORY_NONCONTIGUOUS, ADDR_SYSMEM,
                              cacheType, memdescFlags);
     if (rmStatus != NV_OK)
@@ -231,12 +247,19 @@ osCreateMemdescFromPages
         return rmStatus;
     }
 
+    pMemDesc = *ppMemDesc;
+
+    // Restore the buffer size.
+    if (compoundOrder > 0)
+    {
+        pMemDesc->Size = size;
+    }
+
     if (FLD_TEST_DRF(OS02, _FLAGS, _GPU_CACHEABLE, _YES, flags))
         gpuCachedFlags = NV_MEMORY_CACHED;
     else
         gpuCachedFlags = NV_MEMORY_UNCACHED;
 
-    pMemDesc = *ppMemDesc;
     rmStatus = nv_register_user_pages(NV_GET_NV_STATE(pGpu),
             osPageCount,
             memdescGetPteArray(pMemDesc, AT_CPU), pImportPriv,
@@ -251,7 +274,18 @@ osCreateMemdescFromPages
     memdescSetFlag(pMemDesc, MEMDESC_FLAGS_KERNEL_MODE, NV_FALSE);
     memdescSetFlag(pMemDesc, MEMDESC_FLAGS_EXT_PAGE_ARRAY_MEM, NV_TRUE);
 
-    if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
+    if (compoundOrder > 0)
+    {
+        NvU64 hugepageGranularity = (NvU64)os_page_size << compoundOrder;
+
+        NV_ASSERT_OK_OR_GOTO(rmStatus,
+            memdescSetAllocSizeFields(pMemDesc, size, (NvU32)hugepageGranularity),
+            cleanup);
+
+        // UVM selects a supported GPU page size.
+        memdescSetPageSize(pMemDesc, AT_GPU, hugepageGranularity);
+    }
+    else if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
     {
         NV_ASSERT_OR_GOTO((os_page_size & (pMemDesc->pageArrayGranularity - 1ULL)) == 0, cleanup);
         NV_ASSERT_OK_OR_GOTO(rmStatus, memdescSetAllocSizeFields(pMemDesc, size, os_page_size), cleanup);
@@ -268,11 +302,12 @@ osCreateMemdescFromPages
     }
 
 
-    //
-    // If the OS layer doesn't think in RM page size, we need to inflate the
-    // PTE array into RM pages.
-    //
-    if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
+    // Inflate base-page arrays to RM pages.
+    if (compoundOrder > 0)
+    {
+        // No conversion needed.
+    }
+    else if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
     {
         // Because os_page_size == pMemDesc->pageArrayGranularity, we don't need to do any page array conversion.
         NV_ASSERT_OR_ELSE(os_page_size == pMemDesc->pageArrayGranularity, rmStatus = NV_ERR_INVALID_ARGUMENT; goto cleanup);
@@ -294,10 +329,15 @@ osCreateMemdescFromPages
     memdescSetMemData(pMemDesc, *ppPrivate, NULL);
 
     rmStatus = memdescMapIommu(pMemDesc, pGpu->busInfo.iovaspaceId);
+
 cleanup:
     if (rmStatus != NV_OK)
     {
-        if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
+        if (compoundOrder > 0)
+        {
+            // No conversion needed.
+        }
+        else if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
         {
             // Because os_page_size == pMemDesc->pageArrayGranularity, we don't need to do any page array conversion.
             NV_ASSERT(os_page_size == pMemDesc->pageArrayGranularity);
@@ -1187,14 +1227,22 @@ osDestroyOsDescriptorPageArray
     MEMORY_DESCRIPTOR *pMemDesc
 )
 {
-    OBJGPU   *pGpu        = pMemDesc->pGpu;
-    NvU64     osPageCount;
+    OBJGPU   *pGpu = pMemDesc->pGpu;
     NV_STATUS status;
     void     *pPrivate;
+    NvU32     compoundOrder;
+    NvU64     osPageCount;
 
     pPrivate = memdescGetMemData(pMemDesc);
 
     NV_ASSERT(pPrivate != NULL);
+
+    compoundOrder = nv_get_compound_order(pPrivate);
+
+    if (compoundOrder > 0 || IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
+        osPageCount = pMemDesc->PageCount;
+    else
+        osPageCount = NV_RM_PAGES_TO_OS_PAGES(pMemDesc->PageCount);
 
     //
     // TODO: Bug 1811006: Notably skip any IOMMU mapping management as the
@@ -1205,21 +1253,21 @@ osDestroyOsDescriptorPageArray
     // be cleaned up once the fix for bug 1811006 is known.
     //
 
-    if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
+    // Deflate base-page arrays to OS pages.
+    if (compoundOrder > 0)
+    {
+        // No conversion needed.
+    }
+    else if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
     {
         // Because os_page_size == pMemDesc->pageArrayGranularity, we don't need to do any page array conversion.
         NV_ASSERT_OR_RETURN_VOID(os_page_size == pMemDesc->pageArrayGranularity);
-        osPageCount = pMemDesc->PageCount;
     }
-    else
-    {
-        osPageCount = NV_RM_PAGES_TO_OS_PAGES(pMemDesc->PageCount);
-        if ((NV_RM_PAGE_SIZE < os_page_size) &&
+    else if ((NV_RM_PAGE_SIZE < os_page_size) &&
             !memdescGetContiguity(pMemDesc, AT_CPU))
-        {
-            RmDeflateRmToOsPageArray(memdescGetPteArray(pMemDesc, AT_CPU),
-                                    pMemDesc->PageCount);
-        }
+    {
+        RmDeflateRmToOsPageArray(memdescGetPteArray(pMemDesc, AT_CPU),
+                                pMemDesc->PageCount);
     }
 
     nv_unregister_user_pages(NV_GET_NV_STATE(pGpu), osPageCount,
@@ -1231,12 +1279,6 @@ osDestroyOsDescriptorPageArray
     }
     else
     {
-        //
-        // We use MEMDESC_FLAGS_USER_READ_ONLY because this reflects the
-        // NVOS02_FLAGS_ALLOC_USER_READ_ONLY flag value passed into
-        // os_lock_user_pages(). That flag also results in
-        // MEMDESC_FLAGS_DEVICE_READ_ONLY being set.
-        //
         NvBool writable = !memdescGetFlag(pMemDesc, MEMDESC_FLAGS_USER_READ_ONLY);
         NvU32 flags = DRF_NUM(_LOCK_USER_PAGES, _FLAGS, _WRITE, writable);
         status = os_unlock_user_pages(osPageCount, pPrivate, flags);

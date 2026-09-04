@@ -141,10 +141,13 @@ NV_STATUS NV_API_CALL nv_alloc_user_mapping(
 {
     nv_alloc_t *at = pAllocPrivate;
 
+    if ((pageIndex >> at->compound_order) >= at->num_pages)
+        return NV_ERR_INVALID_ARGUMENT;
+
     if (at->flags.contig)
         *pUserAddress = (at->page_table[0].phys_addr + (pageIndex * PAGE_SIZE) + pageOffset);
     else
-        *pUserAddress = (at->page_table[pageIndex].phys_addr + pageOffset);
+        *pUserAddress = nv_alloc_page_address(at, pageIndex) + pageOffset;
 
     return NV_OK;
 }
