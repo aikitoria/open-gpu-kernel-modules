@@ -1,4 +1,4 @@
-# NVIDIA driver 615.71.09 with P2P for RTX 30, 40, and 50 series
+# NVIDIA driver 615.71.10 with P2P for RTX 30, 40, and 50 series
 
 Patched NVIDIA kernel modules for GPU-to-GPU transfers over PCIe BAR1 or NVLink,
 including between generations. No extra NVIDIA module parameters are needed.
@@ -40,7 +40,7 @@ separate console mapping.
    - Edit `/etc/default/grub`
    - Add `amd_iommu=on iommu=pt` to `GRUB_CMDLINE_LINUX_DEFAULT` (use `intel_iommu=on iommu=pt` on Intel)
    - Run `sudo update-grub`
-3. Install the [NVIDIA 615.71.09 driver](https://www.nvidia.com/en-us/drivers/details/278450/).
+3. Install the [NVIDIA 615.71.10 driver](https://www.nvidia.com/en-us/drivers/unix/).
 4. Run `./install.sh` in this repo.
 5. For mixed-generation P2P, back up and patch the system `libcuda` as described below.
 6. Reboot the server.

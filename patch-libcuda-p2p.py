@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Persistently patch NVIDIA 615.71.09 libcuda for mixed-generation P2P support."""
+"""Persistently patch the installed NVIDIA libcuda for mixed-generation P2P.
+
+Byte signatures were derived from the 615.71.09 libcuda; the script verifies
+each matches exactly once and fails loudly if a newer driver changed them.
+"""
 
 from pathlib import Path
 import re
