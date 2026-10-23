@@ -45,6 +45,21 @@ separate console mapping.
 5. For mixed-generation P2P, back up and patch the system `libcuda` as described below.
 6. Reboot the server.
 
+### Boot-time fallback
+
+`install.sh` also deploys `nvidia-p2p.service` (when a stock backup exists at
+`/root/nvidia-kmod-backup-official-615.71.10/`): at every boot it loads the P2P
+modules and, if that fails, automatically restores the stock driver so the
+system always comes up with a working NVIDIA driver. Result is logged to
+`/var/log/nvidia-p2p.log`; the loaded build is identified by the timestamp in
+`dmesg | grep "NVIDIA UNIX Open Kernel Module"`.
+
+> [!NOTE]
+> Modules are packaged as **CRC32 xz** (`install.sh` handles this). The `xz`
+> default CRC64 is rejected by the kernel's in-kernel module decompressor
+> (`decompression failed with status 6` in dmesg, silent `Invalid argument`
+> from modprobe). Stock DKMS modules are CRC32.
+
 ## Mixed-generation `libcuda` patch
 
 Set `LIBCUDA` to your installed library, back it up, and run
