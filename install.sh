@@ -19,6 +19,19 @@ if [ -x "$SIGN_FILE" ] && [ -f "$KEY" ] && [ -f "$CERT" ]; then
     done
 fi
 
+# The kernel's own modules_install also signs (CONFIG_MODULE_SIG_ALL) using
+# key material it expects at <kerneldir>/certs/signing_key.{pem,x509}.
+# Distro kernel-devel trees don't ship these; provide the DKMS signing key
+# so the built-in SIGN step succeeds instead of spewing SSL errors.
+KSRC=/usr/src/kernels/$(uname -r)
+if [ -d "$KSRC" ] && [ -f "$KEY" ] && [ -f "$CERT" ] && [ ! -f "$KSRC/certs/signing_key.pem" ]; then
+    sudo mkdir -p "$KSRC/certs"
+    sudo cp "$KEY"  "$KSRC/certs/signing_key.pem"
+    sudo cp "$CERT" "$KSRC/certs/signing_key.x509"
+    sudo chmod 600 "$KSRC/certs/signing_key.pem"
+    echo "provisioned kernel-tree signing key: $KSRC/certs/"
+fi
+
 sudo make modules_install -j$(nproc)
 
 # Also install into extra/: depmod prefers extra/ over kernel/, which
