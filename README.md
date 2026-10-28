@@ -14,9 +14,11 @@ For PCIe P2P, each GPU needs Resizable BAR and a BAR1 aperture large enough to m
 its usable VRAM. The IOMMU must be configured for passthrough. Consumer Turing
 (RTX 20 series) is not supported by the BAR1 path.
 
-Same-generation pairs only need the patched kernel modules. The models can differ,
-such as RTX 5090 and RTX PRO 6000 Blackwell. Mixed-generation pairs, such as RTX 3090
-and RTX 5090, also need the `libcuda` patch below.
+Same-generation pairs only need the patched kernel modules when both GPUs are
+built on the same die. The models can otherwise differ, such as RTX 5090 and
+RTX PRO 6000 Blackwell. Pairs mixing generations (RTX 3090 and RTX 5090) or
+mixing dies within one generation (RTX 3080 Ti and RTX 3060, GA102 and GA106)
+also need the `libcuda` patch below.
 
 NVLink is used where available; other pairs use PCIe BAR1. This also works in systems
 with both NVLink-connected pairs and GPUs without NVLink.
@@ -42,10 +44,18 @@ separate console mapping.
    - Run `sudo update-grub`
 3. Install the [NVIDIA 615.78.08 driver](https://www.nvidia.com/en-us/drivers/details/280299/).
 4. Run `./install.sh` in this repo.
-5. For mixed-generation P2P, back up and patch the system `libcuda` as described below.
+5. For mixed-generation or cross-die P2P, back up and patch the system `libcuda` as described below.
 6. Reboot the server.
 
-## Mixed-generation `libcuda` patch
+## Mixed-generation and cross-die `libcuda` patch
+
+Stock `libcuda` checks that peer GPUs have the same chip class (the value at
+device struct offset 0xc50, e.g. GH100, GB100, GA102). Four such checks gate
+`cudaDeviceCanAccessPeer` and peer setup, so any pair crossing a die boundary —
+even within one generation and architecture, such as GA102 and GA106 — reports
+`cudaDeviceCanAccessPeer = 0` and error 217 from `cudaDeviceEnablePeerAccess`
+while the kernel modules themselves report P2P as OK. The patch converts those
+four equality checks into unconditional jumps.
 
 Set `LIBCUDA` to your installed library, back it up, and run
 [`patch-libcuda-p2p.py`](patch-libcuda-p2p.py):
