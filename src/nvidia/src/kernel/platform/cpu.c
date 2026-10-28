@@ -1448,6 +1448,13 @@ static void cpuidInfoAMD(OBJSYS *pSys, PCPUIDINFO pCpuidInfo)
                 break;
         }
     }
+    else if (pCpuidInfo->Family >= 7)
+    {
+        // Zen and newer report a raw base family below 0xF (Zen 0x17..0x1B
+        // display as 7..10 here), so the extended-family switch above never
+        // runs and cpuInfo.type would stay UNKNOWN. Classify them as Ryzen.
+        pSys->cpuInfo.type = NV0000_CTRL_SYSTEM_CPU_TYPE_RYZEN;
+    }
 
     if (pCpuidInfo->ExtendedFeatures & CPU_EXT_3DNOW)
         pSys->cpuInfo.caps |= NV0000_CTRL_SYSTEM_CPU_CAP_3DNOW;      // 3DNow
